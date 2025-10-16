@@ -1,0 +1,25 @@
+defaults:
+  - train
+  - _self_
+
+headless: false
+sim_device: 'cuda:0'
+num_envs: 10
+rl_device: 'cuda:0'
+run_name: test
+task: ${algorithm.task}
+task_id: ${dataset.task_id}
+
+resume_path: null
+export_policy: false
+export_policy_path: ${base}/exp_results/onnx/${now:%Y%m%d_%H%M%S}_${robot.name}_${task_id}_${algorithm.algo_name}
+export_policy_name: ${now:%Y%m%d_%H%M%S}_${robot.name}_${task_id}_${algorithm.algo_name}
+
+eval_ckpt_list: null
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false

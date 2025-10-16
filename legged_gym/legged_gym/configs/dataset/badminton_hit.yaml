@@ -1,0 +1,35 @@
+defaults:
+  - base
+  - _self_
+
+task_id: badminton_hit
+
+terrain:
+  keyframe_pos: 0.1
+  keyframe_pos_offset_range: [0., 0.4]
+  terrain_dict: {"parkour_flat": 1.0,
+                  "parkour_hurdle": 0,
+                  "parkour_wall": 0.0,
+                  "parkour_step": 0.0,
+                  "parkour_gap": 0.0}
+  terrain_length: 6
+  terrain_width: 6
+  terrain_proportions: [1.0, 0.0, 0.0, 0.0, 0.0] # parkour_flat is the only terrain type
+
+dataset:
+  folder: ???
+  keyframe_times: [0.1, 0.3, 0.5, 0.7, 0.9, 1.1, 1.2, 1.7, 1.8, 2.1, 2.3, 2.5, 2.7, 2.9, 3.1, 3.3, 3.5, 3.9]
+  keyframe_pos_index: [5, 7, 9]
+  motion_x_offset: 0.0
+  motion_z_offset: 0.0
+  keyframe_offset_axis: xy
+  only_single_keyframe: false
+  special_scale_index: [5, 7, 9]
+  joint_mapping: ???
+  init_rotation: [0, 0, 0]
+
+rewards:
+  scales:
+    sparse_tracking_trunk_height: 5
+
+checkpoint_path: null

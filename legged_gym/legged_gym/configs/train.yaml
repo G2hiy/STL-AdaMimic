@@ -1,0 +1,150 @@
+headless: true
+sim_device: 'cuda:0'
+num_envs: 4096
+rl_device: 'cuda:0'
+base: ../..
+run_name: test
+task: ${algorithm.task}
+task_id: ${dataset.task_id}
+
+robot: ???
+algorithm: ???
+dataset: ???
+
+env:
+  misc:
+    seed: 1
+
+  sim:
+    dt: 0.005
+    substeps: 1
+    gravity: [0., 0. ,-9.81]  # [m/s^2]
+    up_axis: 1  # 0 is y, 1 is z
+
+    physx:
+      num_threads: 4
+      solver_type: 1  # 0: pgs, 1: tgs
+      num_position_iterations: 4
+      num_velocity_iterations: 0
+      contact_offset: 0.01  # [m]
+      rest_offset: 0.0   # [m]
+      bounce_threshold_velocity: 0.5 #0.5 [m/s]
+      max_depenetration_velocity: 1.0
+      max_gpu_contact_pairs: 8388608 #2**24 -> needed for 8000 envs and more
+      default_buffer_size_multiplier: 5
+      contact_collection: 2 # 0: never, 1: last sub-step, 2: all sub-steps (default=2)
+
+  # viewer camera:
+  viewer:
+    ref_env: 0
+    pos: [10, 0, 6]  # [m]
+    lookat: [11., 5, 3.]  # [m]
+
+  normalization:
+    obs_scales:
+      lin_vel: 2.0
+      ang_vel: 0.25
+      dof_pos: 1.0
+      dof_vel: 0.05
+      height_measurements: 5.0
+      norm_time: 1.0
+    clip_observations: 100.
+    clip_actions: 100.
+
+  noise:
+    add_noise: true
+    noise_level: 1.0 # scales other values
+    noise_scales:
+      dof_pos: 0.01
+      dof_vel: 1.5
+      lin_vel: 0.1
+      ang_vel: 0.2
+      gravity: 0.05
+      height_measurements: 0.1
+      motion_time: 0.02
+      odometry: 0.01
+      odometry_rot: 0.001
+      last_action: 0.1
+    
+      quat_offset_range: [-15, 15]
+    add_init_quat_noise: false
+    init_quat_noise_range: [-5, 5]
+    c_vel: 100
+
+  deviation:
+    max_deviation_heading: 0.8 # rad
+    max_deviation_distance: 0.02 # m
+
+    # threshold
+    max_base_axis_angle: 1.2 # rad
+    max_body_distance: 1.5 # m
+    max_upper_dof_angle: 0.8 # rad
+    max_lower_dof_angle: 1 # rad
+
+  domain_rand:
+    use_random: true
+    randomize_joint_injection: ${env.domain_rand.use_random}
+    joint_injection_range: [-0.03, 0.03]
+
+    randomize_actuation_offset: ${env.domain_rand.use_random}
+    actuation_offset_range: [-0.03, 0.03]
+
+    randomize_motor_strength: ${env.domain_rand.use_random}
+    motor_strength_range: [0.9, 1.1]
+
+    randomize_payload_mass: ${env.domain_rand.use_random}
+    payload_mass_range: [-2, 5]
+
+    randomize_com_displacement: ${env.domain_rand.use_random}
+    com_displacement_range: [-0.1, 0.1]
+
+    randomize_link_mass: ${env.domain_rand.use_random}
+    link_mass_range: [0.9, 1.1]
+    
+    randomize_friction: ${env.domain_rand.use_random}
+    friction_range: [0.1, 1.1]
+    
+    randomize_restitution: ${env.domain_rand.use_random} 
+    restitution_range: [0.0, 0.1]
+    
+    randomize_kp: ${env.domain_rand.use_random}
+    kp_range: [0.85, 1.15]
+    
+    randomize_kd: ${env.domain_rand.use_random}
+    kd_range: [0.85, 1.15]
+    
+    randomize_initial_joint_pos: ${env.domain_rand.use_random}
+    initial_joint_pos_scale: [0.5, 1.5]
+    initial_joint_pos_offset: [-0.1, 0.1]
+
+    delay: ${env.domain_rand.use_random}
+    max_delay_timesteps: 5
+
+    push_robots: true
+    pull_force: false
+    push_interval_s: 20
+    max_push_vel_xy: 0.5
+
+
+  init_state: ${robot.init_state}
+  control: ${robot.control}
+  asset: ${robot.asset}
+  env: ${robot.env}
+
+  terrain: ${dataset.terrain}
+  rewards: ${dataset.rewards}
+  rewards_limit: ${algorithm.reward_limit}
+  reward_penalty: ${algorithm.reward_penalty}
+  termination: ${dataset.termination}
+  dataset: ${dataset.dataset}
+
+  termination_curriculum: ${algorithm.termination_curriculum}
+  algorithm: ${algorithm.algorithm}
+  amp: ${algorithm.algo.amp}
+
+algo: ${algorithm.algo}
+checkpoint_path: null
+
+hydra:
+  run:
+    dir: ../exp/${robot.name}/${task_id}/${algorithm.algo_name}/${now:%Y%m%d_%H%M%S}_${robot.name}_${task_id}_${algorithm.algo_name}_${run_name}

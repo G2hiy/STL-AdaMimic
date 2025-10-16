@@ -1,0 +1,17 @@
+name: adamimic
+channels:
+  - defaults
+dependencies:
+  - python=3.8
+  - tensorboard
+  - tqdm
+  - numpy=1.20.3
+  - seaborn
+  - GitPython
+  - pydelatin
+  - pyfqmr
+  - hydra-core
+  - pip
+  - wandb
+  - pip:
+    - git+https://github.com/KellerJordan/Muon

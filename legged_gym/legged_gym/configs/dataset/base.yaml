@@ -1,0 +1,132 @@
+terrain:
+  terrain_dict: ???
+  keyframe_pos: ???
+  keyframe_pos_offset_range: ???
+
+  fixed_difficulty: true
+  mesh_type: 'trimesh' # "heightfield" # none, plane, heightfield or trimesh
+  hf2mesh_method: "grid"  # grid or fast
+  max_error: 0.1 # for fast
+  max_error_camera: 2
+
+  y_range: [-0.4, 0.4]
+  
+  edge_width_thresh: 0.05
+  horizontal_scale: 0.05 # [m] influence computation time by a lot
+  horizontal_scale_camera: 0.1
+  vertical_scale: 0.005 # [m]
+  border_size: 3 # [m]
+  height: [0.02, 0.06]
+  simplify_grid: true
+  gap_size: [0.02, 0.1]
+  stepping_stone_distance: [0.02, 0.08]
+  downsampled_scale: 0.075
+  curriculum: true
+
+  all_vertical: false
+  no_flat: true
+  dynamic: false
+  static_friction: 0.7
+  dynamic_friction: 0.7
+  restitution: 0.
+  measure_heights: false
+  measure_interval: 1
+  height_buffer_len: 4
+
+  measured_points_x: [-0.25, -0.2, -0.15, -0.1, -0.05, 0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6] # [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2] 
+  measured_points_y: [-0.2, -0.15, -0.1, -0.05, 0, 0.05, 0.1, 0.15, 0.2] # [-0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4]
+  critic_measured_points_x: [-0.3, -0.25, -0.2, -0.15, -0.1, -0.05, 0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65]
+  critic_measured_points_y: [-0.25, -0.2, -0.15, -0.1, -0.05, 0, 0.05, 0.1, 0.15, 0.2, 0.25]
+
+  measure_horizontal_noise: 0.0
+  
+  selected: false # select a unique terrain type and pass all arguments
+  terrain_kwargs: null # Dict of arguments for selected terrain
+  max_init_terrain_level: 19 # starting curriculum state
+  terrain_length: ???
+  terrain_width: ???
+  num_rows: 20 # number of terrain rows (levels)  # spreaded is benifitiall !
+  num_cols: 20 # number of terrain cols (types)
+
+  terrain_proportions: ???
+  
+  # trimesh only:
+  slope_treshold: 1.5 # slopes above this threshold will be corrected to vertical surfaces
+  origin_zero_z: true
+
+  num_goals: 1
+
+rewards:
+  reward_groups: ['dense', 'sparse']
+  num_reward_groups: 2
+  reward_group_weights: [[0.5, 1], [0.5, 1]]
+
+  scales:
+    dense_dof_pos_limits: -10.0
+    dense_dof_vel_limits: -5.0
+    dense_torque_limits: -5.0
+    sparse_termination: -200
+    dense_torques: -0.0000002
+    dense_action_rate: -0.5    
+
+    sparse_tracking_body_position: 10 
+    sparse_tracking_body_rot: 5
+    sparse_tracking_body_position_feet: 10
+    dense_tracking_dof_pos: 0.75
+    dense_tracking_body_position_local: 0.75
+    dense_tracking_body_rot_local: 0.5
+
+  only_positive_rewards: false  # if true negative total rewards are clipped at zero (avoids early termination problems)
+  soft_dof_pos_limit:  0.98 # percentage of urdf limits, values above this limit are penalized
+  soft_dof_vel_limit: 0.98
+  soft_torque_limit: 0.98
+  teleop_body_pos_lowerbody_weight: 0.5
+  teleop_body_pos_upperbody_weight: 0.5
+
+  feet_slippage_sigma: 1.0
+  
+  high_critic_dense_reward_names: [
+      "dense_tracking_body_position_local"
+  ]
+  high_critic_sparse_reward_names: [
+      "sparse_tracking_body_position"
+      ]
+
+  reward_tracking_sigma:
+      teleop_upper_body_pos: 0.03 
+      teleop_lower_body_pos: 0.1 
+      trunk_rot_sigma: 4.0
+      trunk_height_sigma: 100.0 
+
+      dof_pos_sigma: 1.0 
+      dof_vel_sigma: 1.0
+
+      teleop_feet_pos: 0.03 
+
+      base_pos_sigma: 500
+      base_rot_sigma: 20.0
+      base_lin_vel_sigma: 0.5
+      base_ang_vel_sigma: 0.1
+
+      teleop_body_rot: 1.0 
+      teleop_body_vel: 1.0
+      teleop_body_ang_vel: 1.0
+
+termination:
+  termination_height: 0.3 # m
+  deviation_time_limit: 0.02 # sec
+  height_termination: true
+  rot_termination: true
+  dof_termination: false
+
+dataset:
+  frame_rate: 30
+  min_time: 0.1 # sec
+  time_scale: 1
+  joint_mapping: ${base}/resources/dataset/g1_dof27_data/track/joint_id.txt
+  task_id: ${task_id}
+  real: false
+  height_offset: 0
+  keyframe_pos_direction: null
+
+checkpoint_path: ${checkpoint_path}

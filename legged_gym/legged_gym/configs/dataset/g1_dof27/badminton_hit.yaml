@@ -1,0 +1,7 @@
+defaults:
+  - badminton_hit
+  - _self_
+
+dataset:
+  folder: ${base}/resources/dataset/g1_dof27_data/badminton_hit/output
+  joint_mapping: ${base}/resources/dataset/g1_dof27_data/joint_id.txt

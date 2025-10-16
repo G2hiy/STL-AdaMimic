@@ -1,0 +1,141 @@
+task: 'motion_tracking'
+algo_name: deepmimic_noadapt
+
+algorithm:
+  infer_keyframe_time: true
+  apply_reward_scale: true
+  sparse_global: false
+  sparse_local: false
+  special_scale: true
+  special_scale_size: 50
+
+  reverse_term_curriculum: true
+  reverse_term_curriculum_iter: 8000
+  rsi: true
+  no_sparse: true
+  amp: false
+  no_dense: false
+  no_aug: true
+
+termination_curriculum:
+  terminate_when_motion_far_curriculum: true
+  terminate_when_motion_far_initial_threshold: 1.5
+  terminate_when_motion_far_threshold_max: 2
+  terminate_when_motion_far_threshold_min: 0.6
+  terminate_when_motion_far_curriculum_degree: 0.000025
+
+  terminate_when_motion_far_curriculum_level_down_threshold: 40
+  terminate_when_motion_far_curriculum_level_up_threshold: 42
+
+
+reward_limit:
+  reward_limits_curriculum:
+    soft_dof_pos_curriculum: true
+    soft_dof_pos_initial_limit: 1.15
+    soft_dof_pos_max_limit: 1.25
+    soft_dof_pos_min_limit: 0.98
+    soft_dof_pos_curriculum_degree: 0.0000005
+    soft_dof_pos_curriculum_level_down_threshold: 40
+    soft_dof_pos_curriculum_level_up_threshold: 42
+
+    soft_dof_vel_curriculum: true
+    soft_dof_vel_initial_limit: 1.15
+    soft_dof_vel_max_limit: 1.25
+    soft_dof_vel_min_limit: 0.98
+    soft_dof_vel_curriculum_degree: 0.0000005
+    soft_dof_vel_curriculum_level_down_threshold: 40
+    soft_dof_vel_curriculum_level_up_threshold: 42
+
+    soft_torque_curriculum: true
+    soft_torque_initial_limit: 1.15
+    soft_torque_max_limit: 1.25
+    soft_torque_min_limit: 0.98
+    soft_torque_curriculum_degree: 0.0000005
+    soft_torque_curriculum_level_down_threshold: 40
+    soft_torque_curriculum_level_up_threshold: 42
+
+reward_penalty:
+  reward_penalty_curriculum: true
+  reward_penalty_degree: 0.000003
+  reward_initial_penalty_scale: 0.10
+  reward_min_penalty_scale: 0.0
+  reward_max_penalty_scale: 0.2
+  reward_penalty_level_down_threshold: 40
+  reward_penalty_level_up_threshold: 42
+
+  reward_penalty_reward_names: [
+      "dense_dof_pos_limits",
+      "dense_dof_vel_limits",
+      "dense_torque_limits",
+      "dense_torques",
+      "dense_dof_vel",
+      "dense_action_rate",
+      "dense_feet_slippage"]
+
+algo:
+  seed: 1
+  runner_class_name: TrackOnPolicyRunner
+
+  policy:
+    actor_hidden_dims: [512, 256, 128] 
+    critic_hidden_dims: [512, 256, 128]
+    actor_time_scale_range: [-0.0, 0.0]
+    fixed_dt: 0.02
+    actor_time_init_noise_std: 0.8
+    init_noise_std: 0.8
+    activation: 'elu' # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
+    schedule: 'fixed' # could be adaptive, fixed
+    infer_keyframe_time: true
+    resume: false
+
+  algorithm:
+    value_loss_coef: 1.0
+    use_clipped_value_loss: true
+    clip_param: 0.2
+    entropy_coef: 0.01
+    num_learning_epochs: 5
+    num_mini_batches: 4 # mini batch size: num_envs*nsteps / nminibatches
+    learning_rate: 1.e-3 #5.e-4
+    schedule: 'adaptive' # could be adaptive, fixed
+    gamma: [0.99, 1]
+    lam: 0.95
+    desired_kl: 0.01
+    max_grad_norm: 1.
+    use_smooth: true
+    infer_keyframe_time: true
+    train_high: false
+    use_timeout: [true, false]
+    
+  runner:
+    policy_class_name: 'TrackActorCritic'
+    algorithm_class_name: 'TrackPPO'
+    num_steps_per_env: 75 # per iteration
+    max_iterations: 40000 # number of policy updates
+    train_high: false
+
+    # logging
+    save_interval: 500 # check for potential saves every this many iterations
+    experiment_name: ${env.asset.name}_deepmimic
+    run_name: ${run_name}
+    wandb_project: "adamimic"
+    logger: 'wandb'
+
+    # load and resume
+    resume: false
+    load_run: -1 # -1: last run
+    checkpoint: -1 # -1: last saved model
+    resume_path: null
+
+  amp:
+    num_one_step_obs: 27 
+    # num_one_step_obs: 78
+    amp_coef: 0.5
+    obs_type: dof
+    # obs_type: dof_localPos_phase
+    frame_skip: 1
+    num_steps: 2
+    num_obs: 54
+    # num_obs: 156
+    mixed_data: false
+    ratio_random_range: [0.95, 1.05]
+    use_normalizer: false

@@ -1,0 +1,38 @@
+defaults:
+  - base
+  - _self_
+
+task_id: jump_step_down
+
+terrain:
+  keyframe_pos: 0.08
+  keyframe_pos_offset_range: [-0.06, 0.4]
+  terrain_dict: {"parkour_flat": 0.0,
+                  "parkour_hurdle": 0,
+                  "parkour_wall": 0.0,
+                  "parkour_step": 0.0,
+                  "parkour_gap": 0.0,
+                  "jump_stair": 1.0}
+  terrain_length: 6
+  terrain_width: 6
+  terrain_proportions: [0.0, 0.0, 0.0, 0.0, 0.0, 1.0] # jump_stair is the only terrain type
+
+dataset:
+  folder: ???
+  keyframe_times: [0.1, 0.3, 0.5, 0.7, 1.0, 1.3, 1.6, 1.9, 2.1, 2.4, 2.75, 2.8, 3.1, 3.4, 3.7, 4.0, 4.3, 4.6, 4.9, 5.2]
+  keyframe_pos_index: [9]
+  motion_x_offset: -0.43
+  keyframe_offset_axis: z
+  only_single_keyframe: false
+  motion_z_offset: 0.00
+  special_scale_index: [9, 17]
+  joint_mapping: ${base}/resources/dataset/g1_data/track/joint_id.txt
+  init_rotation: [0, 0, -1.57]
+  height_offset: -0.03
+  
+rewards:
+  scales:
+    sparse_tracking_body_position_feet: 25
+    sparse_tracking_trunk_height: 25
+    
+checkpoint_path: null
