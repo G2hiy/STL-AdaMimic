@@ -1,5 +1,5 @@
 # AdaMimic: Adaptive Motion Tracking
-<!-- [![arXiv](https://img.shields.io/badge/arXiv-2502.08378-brown)](https://arxiv.org/abs/2502.08378) -->
+[![arXiv](https://img.shields.io/badge/arXiv-2510.14454-brown)](https://arxiv.org/abs/2510.14454)
 [![](https://img.shields.io/badge/Website-%F0%9F%9A%80-yellow)](https://taohuang13.github.io/adamimic.github.io/)
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)]()
 [![](https://img.shields.io/badge/Youtube-🎬-red)](https://www.youtube.com/watch?v=OGDoPvs7GS0)
