@@ -76,5 +76,4 @@ legged_gym/legged_gym.egg-info
 *.egg-info
 __pycache__
 exp
-legged_gym/resources/
 legged_gym/checkpoints/
