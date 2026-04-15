@@ -56,9 +56,10 @@ from legged_gym.utils.math import (
     quat_rotate_inverse)
 
 from legged_gym.utils.motionlib import (
-    MotionLib, 
-    MotionLibAMP, 
-    load_imitation_dataset
+    MotionLib,
+    MotionLibAMP,
+    load_imitation_dataset,
+    load_diffusion_variants
 )
 
 
@@ -228,6 +229,11 @@ class LeggedRobot(BaseTask):
         return self.amp_obs_buf.clone()
 
     def update_motion_offset(self, env_ids=None):
+        # 创新点①: diffusion 分支下，位移多样性已固化在 variants 内，
+        # 不再应用 terrain_keyframe_offset 的代数偏移。
+        if getattr(self.cfg.algorithm, "use_diffusion_ref", False):
+            return
+
         motion_offset = self.terrain_keyframe_offset
 
         if self.cfg.algorithm.no_aug and self.cfg.algorithm.no_sparse:
@@ -1708,6 +1714,17 @@ class LeggedRobot(BaseTask):
         self.init_base_quat[:] = self.base_init_state[3:7]
 
         dataset, mapping = load_imitation_dataset(self.cfg.dataset.folder, self.cfg.dataset.joint_mapping)
+
+        # 创新点①: 若启用 diffusion 参考，把 variants 拼到 dataset 末尾，
+        # 让 MotionLib 以统一方式处理；原 motion 仍在 dataset[0:N_base]。
+        if getattr(self.cfg.algorithm, "use_diffusion_ref", False):
+            assert self.cfg.algorithm.diffusion_ref_path is not None, \
+                "use_diffusion_ref=true 但 diffusion_ref_path 未配置"
+            variants = load_diffusion_variants(self.cfg.algorithm.diffusion_ref_path)
+            print(f"[diffusion] loaded {len(variants)} variants from "
+                  f"{self.cfg.algorithm.diffusion_ref_path}; total motions = "
+                  f"{len(dataset) + len(variants)}")
+            dataset = dataset + variants
         # if self.cfg.amp.mixed_data:
         #     self.motions = MotionLib(dataset, mapping, self.dof_names, self.keyframe_names,
         #                             self.cfg.dataset.frame_rate, self.cfg.dataset.min_time, self.device, self.amp_obs_type, self.cfg.amp.frame_skip, self.cfg.amp.num_steps, self.terrain_types)

@@ -16,6 +16,11 @@ algorithm:
   amp: false
   no_dense: false
   no_aug: false
+
+  # --- 创新点① Diffusion 参考增强（默认关闭，不影响 ablation 路径） ---
+  use_diffusion_ref: false
+  diffusion_ref_path: null          # e.g. resources/dataset/g1_dof27_data_diff/high_jump/variants.pt
+  diffusion_sample_policy: random   # random | curriculum
   
 termination_curriculum:
   terminate_when_motion_far_curriculum: true

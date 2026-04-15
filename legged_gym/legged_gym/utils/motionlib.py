@@ -60,6 +60,29 @@ def load_imitation_dataset(folder, mapping="joint_id.txt", suffix=".pt"):
     return dataset_list, joint_id_dict
 
 
+def load_diffusion_variants(path):
+    """Load pre-generated diffusion variants (.pt) as a list of data dicts.
+
+    Each variant dict must share the same schema as items returned by
+    ``load_imitation_dataset`` (keys: base_position, base_pose, joint_position,
+    link_position, link_orientation, link_velocity, link_angular_velocity,
+    framerate). The constraint ``joint_position == reference_joint_position``
+    is the generator's responsibility; this loader performs no rewriting.
+    """
+    if not os.path.isabs(path):
+        current_file_dir = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.normpath(os.path.join(current_file_dir, path))
+    blob = torch.load(path)
+    variants = blob["variants"] if isinstance(blob, dict) and "variants" in blob else blob
+    assert isinstance(variants, list) and len(variants) > 0, f"empty variants at {path}"
+    required = {"base_position", "base_pose", "joint_position",
+                "link_position", "link_orientation",
+                "link_velocity", "link_angular_velocity", "framerate"}
+    missing = required - set(variants[0].keys())
+    assert not missing, f"variant 0 missing keys: {missing}"
+    return variants
+
+
 def filter_legal_motion(datasets, data_names, base_height_range, base_roll_range, base_pitch_range, min_time):
     legal_datasets, legal_names, total_length, total_time = [], [], 0, 0.0
     
