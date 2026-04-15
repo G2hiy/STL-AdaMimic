@@ -78,3 +78,19 @@ __pycache__
 **/__pycache__/CLAUDE.local.md
 README.md
 legged_gym/resources/dataset/
+
+# 顶层 resources/ 存放 diffusion 训练数据和 variants 产物; 永不入库
+/resources/
+# 以防别的子目录新增数据
+legged_gym/resources/dataset_diff/
+
+# 训练检查点 (含 root_mdm 的 epoch_xxxx.pt)
+/checkpoints/
+
+# 数据/权重二进制格式 (防御性, 兜底常见误 add)
+*.npz
+*.pkl
+*.pt
+*.ckpt
+*.h5
+*.safetensors
