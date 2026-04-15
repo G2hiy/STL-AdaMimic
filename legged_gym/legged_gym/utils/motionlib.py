@@ -65,9 +65,10 @@ def load_diffusion_variants(path):
 
     Each variant dict must share the same schema as items returned by
     ``load_imitation_dataset`` (keys: base_position, base_pose, joint_position,
-    link_position, link_orientation, link_velocity, link_angular_velocity,
-    framerate). The constraint ``joint_position == reference_joint_position``
-    is the generator's responsibility; this loader performs no rewriting.
+    link_position, link_orientation, link_velocity, link_angular_velocity;
+    optional: base_velocity, joint_velocity, base_angular_velocity). The
+    constraint ``joint_position == reference_joint_position`` is the
+    generator's responsibility; this loader performs no rewriting.
     """
     if not os.path.isabs(path):
         current_file_dir = os.path.dirname(os.path.abspath(__file__))
@@ -75,9 +76,10 @@ def load_diffusion_variants(path):
     blob = torch.load(path)
     variants = blob["variants"] if isinstance(blob, dict) and "variants" in blob else blob
     assert isinstance(variants, list) and len(variants) > 0, f"empty variants at {path}"
+    # 与 data.pt 实际 schema 对齐 (不含 framerate, 帧率由 cfg.dataset.frame_rate 提供)
     required = {"base_position", "base_pose", "joint_position",
                 "link_position", "link_orientation",
-                "link_velocity", "link_angular_velocity", "framerate"}
+                "link_velocity", "link_angular_velocity"}
     missing = required - set(variants[0].keys())
     assert not missing, f"variant 0 missing keys: {missing}"
     return variants
