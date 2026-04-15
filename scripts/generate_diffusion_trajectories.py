@@ -9,20 +9,26 @@
 
 输出格式 (与 motionlib.load_diffusion_variants 约定一致):
     {
-      "variants": [ dict(base_position, base_pose, joint_position,
+      "variants": [ dict(base_position, base_pose, base_velocity, base_angular_velocity,
+                          joint_position, joint_velocity,
                           link_position, link_orientation,
-                          link_velocity, link_angular_velocity, framerate), ... ],
+                          link_velocity, link_angular_velocity), ... ],
       "meta": {...}
     }
 
+注: data.pt 不含 framerate 字段, 帧率统一由 cfg.dataset.frame_rate (base.yaml 默认 30)
+    提供, 本脚本通过 --fps 参数传入用于 link_velocity / base_velocity 的有限差分重算.
+
 约束 (论文式 3):
-    - joint_position       = ref["joint_position"]           (完全拷贝)
+    - joint_position       = ref["joint_position"]           (完全拷贝, 关节角不变)
+    - joint_velocity       = ref["joint_velocity"]           (同上)
     - base_pose            = ref["base_pose"]                (冻结根姿态, D2)
+    - base_angular_velocity= ref["base_angular_velocity"]    (同上)
     - link_orientation     = ref["link_orientation"]         (关节+根姿态不变 → 朝向不变)
     - link_angular_velocity= ref["link_angular_velocity"]
     - link_position[t, k]  = ref_link_position[t, k] + (base_pos_new[t] - ref_base_pos[t])
-    - link_velocity        = 有限差分于新 link_position
-    - framerate            = ref["framerate"]
+    - link_velocity        = 有限差分于新 link_position (fps 来自 --fps)
+    - base_velocity        = 有限差分于新 base_position   (fps 来自 --fps)
 """
 
 import argparse
@@ -49,6 +55,8 @@ def parse_args():
     p.add_argument("--max_speed", type=float, default=4.0)
     p.add_argument("--max_accel", type=float, default=30.0)
     p.add_argument("--min_height", type=float, default=0.05)
+    p.add_argument("--fps", type=float, default=30.0,
+                   help="data.pt 没有 framerate 字段；取自 cfg.dataset.frame_rate (base.yaml 默认 30)")
     p.add_argument("--device", default="cuda")
     p.add_argument("--seed", type=int, default=0)
     return p.parse_args()
@@ -100,35 +108,42 @@ def sample_trajectories(
     return x  # (M, T, 3)
 
 
-def build_variant(ref: dict, new_base_pos: torch.Tensor) -> dict:
+def build_variant(ref: dict, new_base_pos: torch.Tensor, fps: float) -> dict:
     """根据论文式 3 约束, 由新 base_position 派生其他字段.
 
-    ref 各字段形状:
-      base_position       (T, 3)
-      base_pose           (T, 3)   RPY
-      joint_position      (T, N_src)
-      link_position       (T, N_bodies, 3)
-      link_orientation    (T, N_bodies, 3)  RPY
-      link_velocity       (T, N_bodies, 3)
+    ref 字段（data.pt 实际 schema）:
+      base_position         (T, 3)
+      base_pose             (T, 3)   RPY
+      base_velocity         (T, 3)   由 base_position 差分得到
+      base_angular_velocity (T, 3)
+      joint_position        (T, N_src)
+      joint_velocity        (T, N_src)
+      link_position         (T, N_bodies, 3)
+      link_orientation      (T, N_bodies, 3)  RPY
+      link_velocity         (T, N_bodies, 3)
       link_angular_velocity (T, N_bodies, 3)
     """
     ref_base = ref["base_position"].float()
     delta = new_base_pos - ref_base                           # (T, 3)
     new_link_pos = ref["link_position"].float() + delta[:, None, :]
-    fps = float(ref["framerate"])
-    # 有限差分重算 link_velocity (末尾填最后一帧保持形状)
-    v = (new_link_pos[1:] - new_link_pos[:-1]) * fps
-    new_link_vel = torch.cat([v, v[-1:]], dim=0)
-    return {
+    # 有限差分重算 link_velocity 和 base_velocity (末尾填最后一帧保持形状)
+    v_link = (new_link_pos[1:] - new_link_pos[:-1]) * fps
+    new_link_vel = torch.cat([v_link, v_link[-1:]], dim=0)
+    v_base = (new_base_pos[1:] - new_base_pos[:-1]) * fps
+    new_base_vel = torch.cat([v_base, v_base[-1:]], dim=0)
+    variant = {
         "base_position":         new_base_pos.clone(),
         "base_pose":             ref["base_pose"].clone(),
+        "base_velocity":         new_base_vel,
+        "base_angular_velocity": ref["base_angular_velocity"].clone(),
         "joint_position":        ref["joint_position"].clone(),
+        "joint_velocity":        ref["joint_velocity"].clone(),
         "link_position":         new_link_pos,
         "link_orientation":      ref["link_orientation"].clone(),
         "link_velocity":         new_link_vel,
         "link_angular_velocity": ref["link_angular_velocity"].clone(),
-        "framerate":             ref["framerate"],
     }
+    return variant
 
 
 def main():
@@ -139,8 +154,8 @@ def main():
     ref = torch.load(args.ref_path)
     ref_base = ref["base_position"].float()
     T_ref = ref_base.shape[0]
-    fps_ref = float(ref["framerate"])
-    print(f"[ref] T={T_ref}  fps={fps_ref}")
+    fps_ref = float(args.fps)
+    print(f"[ref] T={T_ref}  fps={fps_ref} (from --fps)")
 
     model, scheduler, _ = load_model(args.ckpt_path, device)
     rng = parse_delta_p_range(args.delta_p_range)
@@ -181,7 +196,7 @@ def main():
 
     variants = []
     for i, (new_base, cond) in enumerate(zip(kept_root, kept_cond)):
-        v = build_variant(ref, new_base)
+        v = build_variant(ref, new_base, fps_ref)
         # 关键断言: 式 3
         assert torch.equal(v["joint_position"], ref["joint_position"]), "joint_position 未保持不变!"
         variants.append(v)
