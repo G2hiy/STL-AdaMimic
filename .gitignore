@@ -77,3 +77,7 @@ legged_gym/legged_gym.egg-info
 __pycache__
 exp
 legged_gym/checkpoints/
+research-wiki
+CLAUDE.md
+CLAUDE.local.md
+.claude

@@ -19,7 +19,7 @@ algorithm:
 
   # --- 创新点① Diffusion 参考增强（默认关闭，不影响 ablation 路径） ---
   use_diffusion_ref: false
-  diffusion_ref_path: null          # e.g. resources/dataset/g1_dof27_data_diff/high_jump/variants.pt
+  diffusion_ref_path: ${base}/resources/dataset/g1_dof27_data_diff/${task_id}/variants.pt
   diffusion_sample_policy: random   # random | curriculum
   
 termination_curriculum:
