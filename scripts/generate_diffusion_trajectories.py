@@ -74,8 +74,8 @@ def parse_delta_p_range(s: str):
     return torch.tensor([low, high], dtype=torch.float32)
 
 
-def sample_conditions(n: int, rng: torch.Tensor, generator: torch.Generator):
-    u = torch.rand(n, 3, generator=generator)
+def sample_conditions(n: int, rng: torch.Tensor):
+    u = torch.rand(n, 3)
     return rng[0] + u * (rng[1] - rng[0])
 
 
@@ -96,10 +96,9 @@ def sample_trajectories(
     seq_len: int,
     num_inference_steps: int,
     device: torch.device,
-    generator: torch.Generator,
 ):
     M = conds.shape[0]
-    x = torch.randn(M, seq_len, 3, generator=generator, device=device)
+    x = torch.randn(M, seq_len, 3, device=device)
     scheduler.set_timesteps(num_inference_steps, device=device)
     for t in scheduler.timesteps:
         ts = torch.full((M,), int(t.item()), dtype=torch.long, device=device)
@@ -149,7 +148,7 @@ def build_variant(ref: dict, new_base_pos: torch.Tensor, fps: float) -> dict:
 def main():
     args = parse_args()
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-    gen = torch.Generator(device="cpu").manual_seed(args.seed)
+    torch.manual_seed(args.seed)
 
     ref = torch.load(args.ref_path)
     ref_base = ref["base_position"].float()
@@ -168,9 +167,9 @@ def main():
         n_gen = int(n_target * args.overgenerate_ratio) - len(kept_root)
         if n_gen <= 0:
             break
-        conds = sample_conditions(n_gen, rng, gen)
+        conds = sample_conditions(n_gen, rng)
         traj = sample_trajectories(model, scheduler, conds, T_ref,
-                                   args.num_inference_steps, device, gen).cpu()
+                                   args.num_inference_steps, device).cpu()
 
         # 模型学的是起点归零的相对轨迹; 这里把 ref 起点作为绝对基准叠加
         traj_abs = traj + ref_base[:1]
