@@ -77,6 +77,10 @@ legged_gym/legged_gym.egg-info
 __pycache__
 exp
 legged_gym/checkpoints/
+legged_gym/resources/dataset/amass_raw
+legged_gym/resources/dataset/amass_g1
+legged_gym/resources/dataset/diffusion_train
+
 research-wiki
 CLAUDE.md
 CLAUDE.local.md
