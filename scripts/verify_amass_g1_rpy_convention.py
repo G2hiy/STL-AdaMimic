@@ -18,8 +18,8 @@
        - 画 AMASS rpy 与 ref rpy 时间曲线, 保存 PNG
 
 用法:
-    python scripts/verify_amass_g1_rpy_convention.py \\
-        --amass_sample legged_gym/resources/dataset/amass_g1/g1/CMU/01/01_01_poses_120_jpos.npy \\
+    python scripts/verify_amass_g1_rpy_convention.py \
+        --amass_sample legged_gym/resources/dataset/amass_g1/g1/CMU/01/01_01_poses_120_jpos.npy \
         --ref_path     legged_gym/resources/dataset/g1_dof27_data/high_jump/output/data.pt
 """
 
