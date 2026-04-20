@@ -69,12 +69,15 @@ rewards:
     dense_torques: -0.0000002
     dense_action_rate: -0.5    
 
-    sparse_tracking_body_position: 10 
+    sparse_tracking_body_position: 10
     sparse_tracking_body_rot: 5
     sparse_tracking_body_position_feet: 10
     dense_tracking_dof_pos: 0.75
     dense_tracking_body_position_local: 0.75
     dense_tracking_body_rot_local: 0.5
+    # 创新点② STL 连续奖励：默认 0 → 被 _prepare_reward_function 剔除，不进 reward graph；
+    # 启用时需通过 rewards.scales.dense_stl_keyframe=<w> 覆盖为非零值
+    dense_stl_keyframe: 0.0
 
   only_positive_rewards: false  # if true negative total rewards are clipped at zero (avoids early termination problems)
   soft_dof_pos_limit:  0.98 # percentage of urdf limits, values above this limit are penalized

@@ -160,6 +160,23 @@ class LeggedRobot(BaseTask):
         self.reverse_term_curriculum_count = True
         self.rsi = self.cfg.algorithm.rsi
 
+        # --- 创新点② STL 连续奖励（默认关闭，不影响 ablation 路径） ---
+        self.use_stl_reward = bool(getattr(self.cfg.algorithm, "use_stl_reward", False))
+        self.stl_spec = None
+        if self.use_stl_reward:
+            from legged_gym.utils.stl_specs import KeyframeFunnelSTL
+            funnel_cfg = self.cfg.algorithm.stl_funnel
+            kf_idx = torch.tensor(self.keyframe_pos_index, dtype=torch.long, device=self.device)
+            deadlines = self.keyframe_times[kf_idx]
+            self.stl_spec = KeyframeFunnelSTL(
+                keyframe_deadlines=deadlines.tolist(),
+                T_funnel=float(funnel_cfg.T),
+                eps_min=float(funnel_cfg.eps_min),
+                eps_max=float(funnel_cfg.eps_max),
+                beta_time=float(getattr(funnel_cfg, "beta_time", 20.0)),
+                device=self.device,
+            )
+
     def step(self, actions):
         """ Apply actions, simulate, call self.post_physics_step()
 
@@ -2973,3 +2990,14 @@ class LeggedRobot(BaseTask):
         mean_diff_trunk_height = torch.sum(coef * torch.clip(torch.abs(diff_trunk_height) - 0.02, min=0.0), dim=1)
         reward = torch.exp(-self.cfg.rewards.reward_tracking_sigma.trunk_height_sigma * torch.square(mean_diff_trunk_height))
         return reward
+
+    # --- 创新点② STL 连续奖励 --------------------------------------------------
+    def _reward_stl_keyframe(self):
+        """Funnel-based STL robustness ρ(t) = ψ(t) - d(t) over keyframe deadlines.
+        Positive inside funnel; negative outside. 无需 curriculum。"""
+        if self.stl_spec is None or not hasattr(self, "dif_global_body_pos"):
+            return torch.zeros(self.num_envs, device=self.device)
+        from legged_gym.utils.stl_specs import body_pos_tracking_dist
+        reduce = getattr(self.cfg.algorithm.stl_funnel, "reduce", "mean")
+        dist = body_pos_tracking_dist(self.dif_global_body_pos, reduce=reduce)
+        return self.stl_spec.robustness(self.motion_time, dist)

@@ -21,6 +21,17 @@ algorithm:
   use_diffusion_ref: false
   diffusion_ref_path: ${base}/resources/dataset/g1_dof27_data_diff/${task_id}/variants.pt
   diffusion_sample_policy: random   # random | curriculum
+
+  # --- 创新点② STL 连续奖励（默认关闭，不影响 ablation 路径） ---
+  # 启用方式：algorithm.algorithm.use_stl_reward=true 且
+  # 通过 rewards.scales.dense_stl_keyframe=<w> 赋非零权重
+  use_stl_reward: false
+  stl_funnel:
+    T: 0.3            # 漏斗过渡时长 (s)；越小越靠近 keyframe 才收紧
+    eps_min: 0.05     # keyframe 处容差 (m)
+    eps_max: 0.30     # 远离 keyframe 的松弛容差 (m)
+    beta_time: 20.0   # 时间域 softmin 锐度
+    reduce: mean      # body-distance reduction: mean | max
   
 termination_curriculum:
   terminate_when_motion_far_curriculum: true
