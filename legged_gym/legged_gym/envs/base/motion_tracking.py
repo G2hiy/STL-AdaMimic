@@ -160,21 +160,28 @@ class LeggedRobot(BaseTask):
         self.reverse_term_curriculum_count = True
         self.rsi = self.cfg.algorithm.rsi
 
-        # --- 创新点② STL 连续奖励（默认关闭，不影响 ablation 路径） ---
+        # --- 创新点② 真 STL 连续奖励（默认关闭，不影响 ablation 路径） ---
         self.use_stl_reward = bool(getattr(self.cfg.algorithm, "use_stl_reward", False))
-        self.stl_spec = None
+        self.stl_ctx = None
+        self._stl_rho_cache = None
+        self._stl_reward_cache = None
+        self.stl_replace_sparse_tracking = False
         if self.use_stl_reward:
-            from legged_gym.utils.stl_specs import KeyframeFunnelSTL
-            funnel_cfg = self.cfg.algorithm.stl_funnel
-            kf_idx = torch.tensor(self.keyframe_pos_index, dtype=torch.long, device=self.device)
-            deadlines = self.keyframe_times[kf_idx]
-            self.stl_spec = KeyframeFunnelSTL(
-                keyframe_deadlines=deadlines.tolist(),
-                T_funnel=float(funnel_cfg.T),
-                eps_min=float(funnel_cfg.eps_min),
-                eps_max=float(funnel_cfg.eps_max),
-                beta_time=float(getattr(funnel_cfg, "beta_time", 20.0)),
-                device=self.device,
+            from legged_gym.utils.stl_tasks import TASK_SPECS
+            task_id = self.cfg.dataset.task_id
+            if task_id not in TASK_SPECS:
+                raise ValueError(
+                    f"use_stl_reward=true but no STL spec registered for task_id='{task_id}'. "
+                    f"Available: {list(TASK_SPECS.keys())}"
+                )
+            self.stl_ctx = TASK_SPECS[task_id](
+                self.cfg,
+                env_ctx=self._build_stl_env_ctx(),
+            )
+            self.stl_beta_softmin = float(getattr(self.cfg.algorithm, "stl_beta_softmin", 10.0))
+            self.stl_rho_scale = float(getattr(self.cfg.algorithm, "stl_rho_scale", 0.2))
+            self.stl_replace_sparse_tracking = bool(
+                getattr(self.cfg.algorithm, "stl_replace_sparse_tracking", True)
             )
 
     def step(self, actions):
@@ -685,6 +692,9 @@ class LeggedRobot(BaseTask):
         self.reset_buf[env_ids] = 1
         self.keyframe_reset_buf[env_ids] = 0
         self.episode_failed_buf[env_ids] = 0
+        if self.use_stl_reward and self.stl_ctx is not None:
+            for acc in self.stl_ctx.accumulators:
+                acc.reset(env_ids)
         # self.cur_keyframe_stage[env_ids] = -1
         self.delay_buffer[:, env_ids, :] = 0.
         self.lidar_pos[env_ids, :] = 0
@@ -904,6 +914,8 @@ class LeggedRobot(BaseTask):
         # print(self.sparse_scale)omp
         self.rew_buf[:, :] = 0
         self.rew_buf_high[:, :] = 0
+        # 创新点② STL：每步只推进一次 accumulators + 算一次 ρ，下面两条路径共享缓存
+        self._stl_advance()
         for i in range(len(self.reward_functions)):
             name = self.reward_names[i]
             reward_group_name = name.split('_')[0]
@@ -934,7 +946,15 @@ class LeggedRobot(BaseTask):
         self.dif_local_body_pos = cur_body_pos - motion_body_pos
         
         self.rew_buf_high[:, self.reward_groups.index('dense')] += -torch.norm(self.dif_local_body_pos, dim=-1).mean(dim=-1) * self._infer_dt() / (self.dt * self.dt_scale)
-        self.rew_buf_high[:, self.reward_groups.index('sparse')] += -torch.norm(self.dif_global_body_pos, dim=-1).mean(dim=-1) * self.is_stage_transition 
+        # 创新点② 启用 STL 且 stl_replace_sparse_tracking=true 时：
+        #   (1) 跳过原 r_k^global 硬编码项；
+        #   (2) 将 tanh(ρ/scale) 作为新的 r_k^global 注入高层 sparse 通道。
+        if self.use_stl_reward and self.stl_ctx is not None and self.stl_replace_sparse_tracking:
+            stl_hi_scale = float(self.reward_scales.get(f"sparse_stl_{self.task_id}", 0.0))
+            if stl_hi_scale != 0.0 and self._stl_reward_cache is not None:
+                self.rew_buf_high[:, self.reward_groups.index('sparse')] += self._stl_reward_cache * stl_hi_scale
+        else:
+            self.rew_buf_high[:, self.reward_groups.index('sparse')] += -torch.norm(self.dif_global_body_pos, dim=-1).mean(dim=-1) * self.is_stage_transition
         # self.rew_buf_high[:, self.reward_groups.index('dense')] += self._reward_tracking_body_position_local() * self._infer_dt() / (self.dt * self.dt_scale)
         # self.rew_buf_high[:, self.reward_groups.index('sparse')] += self._reward_tracking_body_position()
 
@@ -2991,13 +3011,59 @@ class LeggedRobot(BaseTask):
         reward = torch.exp(-self.cfg.rewards.reward_tracking_sigma.trunk_height_sigma * torch.square(mean_diff_trunk_height))
         return reward
 
-    # --- 创新点② STL 连续奖励 --------------------------------------------------
-    def _reward_stl_keyframe(self):
-        """Funnel-based STL robustness ρ(t) = ψ(t) - d(t) over keyframe deadlines.
-        Positive inside funnel; negative outside. 无需 curriculum。"""
-        if self.stl_spec is None or not hasattr(self, "dif_global_body_pos"):
+    # --- 创新点② 真 STL 连续奖励 ---------------------------------------------
+    def _build_stl_env_ctx(self):
+        """Context passed into stl_tasks.<task>.build() at construction time."""
+        return {
+            "device": self.device,
+            "num_envs": self.num_envs,
+            "h_apex_min_default": 0.55,
+        }
+
+    def _collect_stl_signals(self):
+        """Gather per-env scalar signals used by STL predicates at the current step.
+
+        Returns a dict[str -> (N,) tensor]. Only detached signals are needed because
+        STL ρ is used as a reward (no backprop into the env state); keep graph-free
+        to avoid holding unnecessary activations across env steps.
+        """
+        feet_forces_z = self.contact_forces[:, self.feet_contact_indices, 2]  # (N, Fc)
+        base_z = self.base_pos[:, 2]
+        body_xy_err = torch.norm(self.dif_global_body_pos[:, :, :2], dim=-1).mean(dim=-1)
+        return {
+            "base_z": base_z.detach(),
+            "feet_force_z_max": feet_forces_z.max(dim=-1).values.detach(),
+            "feet_force_z_min": feet_forces_z.min(dim=-1).values.detach(),
+            "body_xy_err": body_xy_err.detach(),
+        }
+
+    def _stl_advance(self):
+        """Step all EventWindowAccumulators and cache ρ + tanh(ρ/scale) for this env step.
+
+        Called once from compute_reward(); downstream paths (reward function and
+        high-critic sparse channel) read the cached tensors to avoid re-stepping
+        accumulators.
+        """
+        self._stl_rho_cache = None
+        self._stl_reward_cache = None
+        if not self.use_stl_reward or self.stl_ctx is None or not hasattr(self, "dif_global_body_pos"):
+            return
+        signals = self._collect_stl_signals()
+        for acc in self.stl_ctx.accumulators:
+            acc.step(self.motion_time, signals, beta=self.stl_beta_softmin)
+        rho = self.stl_ctx.spec_root.robustness(signals, self.motion_time, beta=self.stl_beta_softmin)
+        self._stl_rho_cache = rho
+        self._stl_reward_cache = torch.tanh(rho / max(self.stl_rho_scale, 1e-6))
+        self.extras.setdefault("env", {})
+        self.extras["env"]["stl/rho_mean"] = rho.mean()
+        self.extras["env"]["stl/rho_pos_rate"] = (rho > 0).float().mean()
+
+    def _reward_stl_far_jump(self):
+        """Reward-function entry point for the far_jump STL spec.
+
+        Returns the pre-computed tanh(ρ/scale) cached by _stl_advance(); safe to
+        call multiple times per step (no side effects).
+        """
+        if self._stl_reward_cache is None:
             return torch.zeros(self.num_envs, device=self.device)
-        from legged_gym.utils.stl_specs import body_pos_tracking_dist
-        reduce = getattr(self.cfg.algorithm.stl_funnel, "reduce", "mean")
-        dist = body_pos_tracking_dist(self.dif_global_body_pos, reduce=reduce)
-        return self.stl_spec.robustness(self.motion_time, dist)
+        return self._stl_reward_cache

@@ -26,5 +26,14 @@ dataset:
   motion_z_offset: 0.00
   special_scale_index: [12, 18]
   init_rotation: [0, 0, -1.57]
+  # 创新点② STL 事件时间（秒）。以下数值为粗估：
+  #   takeoff = kt[10] = 3.0  —— 起跳瞬间
+  #   apex    ≈ 3.3           —— 粗估腾空高点（takeoff 与 land 的中点）
+  #   land    = kt[12] = 3.6  —— 落地瞬间（keyframe_pos_index 指向的帧）
+  # 首次启用 STL 前 TODO：用 matplotlib 绘制 ref_base_z(t) 确认精确值，再微调这三者。
+  stl_events:
+    takeoff: 3.0
+    apex: 3.3
+    land: 3.6
 
 checkpoint_path: null

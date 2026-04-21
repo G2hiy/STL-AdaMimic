@@ -22,17 +22,24 @@ algorithm:
   diffusion_ref_path: ${base}/resources/dataset/g1_dof27_data_diff/${task_id}/variants.pt
   diffusion_sample_policy: random   # random | curriculum
 
-  # --- 创新点② STL 连续奖励（默认关闭，不影响 ablation 路径） ---
+  # --- 创新点② 真 STL 连续奖励（替换 Stage 1 稀疏全局奖励 r_k^global） ---
   # 启用方式：algorithm.algorithm.use_stl_reward=true 且
-  # 通过 rewards.scales.dense_stl_keyframe=<w> 赋非零权重
+  #           通过 rewards.scales.sparse_stl_<task>=<w> 覆盖；
+  # 若 stl_replace_sparse_tracking=true，启用时自动将原 sparse_tracking_body_position/_feet/_rot
+  # 的权重置零，实现"替换"语义。
   use_stl_reward: false
-  stl_funnel:
-    T: 0.3            # 漏斗过渡时长 (s)；越小越靠近 keyframe 才收紧
-    eps_min: 0.05     # keyframe 处容差 (m)
-    eps_max: 0.30     # 远离 keyframe 的松弛容差 (m)
-    beta_time: 20.0   # 时间域 softmin 锐度
-    reduce: mean      # body-distance reduction: mean | max
-  
+  stl_rho_scale: 0.2                 # tanh(ρ / scale) 归一化到 [-1, 1]
+  stl_beta_softmin: 10.0             # DSL softmin/softmax 锐度
+  stl_replace_sparse_tracking: true  # 启用时自动关掉 sparse_tracking_* 原项
+  # Task-specific predicate thresholds（可在 task yaml 里覆盖）
+  stl_far_jump:
+    f_air: 5.0           # N，airborne 期间 max feet force 上界
+    f_land: 20.0         # N，land 后 min feet force 下界
+    d_xy: 0.15           # m，落地时 body xy 偏差阈值
+    delta_apex: 0.10     # s，apex 窗口半宽
+    delta_land: 0.15     # s，land 窗口长度
+    h_apex_min: 0.55     # m，apex 高度阈值（先给 g1 站立高度略低的占位值，跑前建议可视化 ref）
+
 termination_curriculum:
   terminate_when_motion_far_curriculum: true
   terminate_when_motion_far_initial_threshold: 1.5

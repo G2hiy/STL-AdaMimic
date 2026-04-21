@@ -75,9 +75,9 @@ rewards:
     dense_tracking_dof_pos: 0.75
     dense_tracking_body_position_local: 0.75
     dense_tracking_body_rot_local: 0.5
-    # 创新点② STL 连续奖励：默认 0 → 被 _prepare_reward_function 剔除，不进 reward graph；
-    # 启用时需通过 rewards.scales.dense_stl_keyframe=<w> 覆盖为非零值
-    dense_stl_keyframe: 0.0
+    # 创新点② 真 STL 连续奖励：按 task 分别挂一个 sparse_stl_<task> 项，默认 0 → 被剔除，
+    # 启用时通过 rewards.scales.sparse_stl_<task>=<w> 覆盖。
+    sparse_stl_far_jump: 0.0
 
   only_positive_rewards: false  # if true negative total rewards are clipped at zero (avoids early termination problems)
   soft_dof_pos_limit:  0.98 # percentage of urdf limits, values above this limit are penalized
@@ -131,5 +131,7 @@ dataset:
   real: false
   height_offset: 0
   keyframe_pos_direction: null
+  # 创新点② STL 事件时间（方式 A 手工覆盖；为 null 时回退 keyframe_pos_index 自动派发）
+  stl_events: null
 
 checkpoint_path: ${checkpoint_path}

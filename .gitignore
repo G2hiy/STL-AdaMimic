@@ -80,7 +80,7 @@ legged_gym/checkpoints/
 legged_gym/resources/dataset/amass_raw
 legged_gym/resources/dataset/amass_g1
 legged_gym/resources/dataset/diffusion_train
-
+docs
 research-wiki
 CLAUDE.md
 CLAUDE.local.md

@@ -257,11 +257,18 @@ def main():
         gen_base_pos = x_denorm[:, :, BASE_POS_SLICE]                      # (n_gen, T, 3)
         gen_base_rpy = x_denorm[:, :, BASE_RPY_SLICE]                      # (n_gen, T, 3)
 
+        # World frame 映射: AMASS retargeted 数据的 base_z 基准 ≈ 0, 和 G1 ref 绝对高度 (~0.75m) 错位.
+        # 每条 variant 起点归零再加 ref 起点, 把轨迹平移到 ref 所在 world frame.
+        # 这也是 MVP 做法 (generate_diffusion_trajectories.py:174-175).
+        gen_base_pos = gen_base_pos - gen_base_pos[:, 0:1, :] + ref_base_pos[0:1, :].unsqueeze(0)
+
         # 诊断: inpaint 后 joint 应 ≈ ref (硬投影前)
         inpaint_err = (gen_joint - ref_joint.unsqueeze(0)).norm(dim=-1).mean().item()
         inpaint_err_log.append(inpaint_err)
-        print(f"[round {rd}] n_gen={n_gen}  inpaint_err(joint)={inpaint_err:.4f} "
-              f"(应 ≈ 0, 证明 inpaint 起作用)")
+        z_min = gen_base_pos[:, :, 2].min().item()
+        z_max = gen_base_pos[:, :, 2].max().item()
+        print(f"[round {rd}] n_gen={n_gen}  inpaint_err(joint)={inpaint_err:.4f}  "
+              f"base_z range=[{z_min:.3f}, {z_max:.3f}]m")
 
         # 运动学过滤 (只对 base_pos)
         mask = kinematic_filter(
