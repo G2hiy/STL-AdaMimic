@@ -270,7 +270,19 @@ def main():
         print(f"[round {rd}] n_gen={n_gen}  inpaint_err(joint)={inpaint_err:.4f}  "
               f"base_z range=[{z_min:.3f}, {z_max:.3f}]m")
 
-        # 运动学过滤 (只对 base_pos)
+        # 诊断: 分别检查 speed/accel/height, 定位是哪一项卡住
+        dt = 1.0 / args.fps
+        v_diag = (gen_base_pos[:, 1:] - gen_base_pos[:, :-1]) / dt              # (n_gen, T-1, 3)
+        a_diag = (v_diag[:, 1:] - v_diag[:, :-1]) / dt                          # (n_gen, T-2, 3)
+        speed_max = v_diag.norm(dim=-1).max(dim=-1).values                      # (n_gen,)
+        accel_max = a_diag.norm(dim=-1).max(dim=-1).values                      # (n_gen,)
+        ref_v = (ref_base_pos[1:] - ref_base_pos[:-1]) / dt
+        ref_a = (ref_v[1:] - ref_v[:-1]) / dt
+        print(f"           speed_max: p50={speed_max.median():.2f} p95={speed_max.quantile(0.95):.2f} "
+              f"| ref_max={ref_v.norm(dim=-1).max():.2f} m/s  (thr={args.max_speed})")
+        print(f"           accel_max: p50={accel_max.median():.1f} p95={accel_max.quantile(0.95):.1f} "
+              f"| ref_max={ref_a.norm(dim=-1).max():.1f} m/s^2  (thr={args.max_accel})")
+
         mask = kinematic_filter(
             gen_base_pos, fps=args.fps,
             max_speed=args.max_speed, max_accel=args.max_accel,
