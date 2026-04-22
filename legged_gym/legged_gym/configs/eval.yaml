@@ -17,6 +17,17 @@ export_policy_name: ${now:%Y%m%d_%H%M%S}_${robot.name}_${task_id}_${algorithm.al
 
 eval_ckpt_list: null
 
+# --- Ablation rollout evaluation (scripts/eval_rollout.py) ---
+eval_rollout:
+  tag: baseline           # variant label: baseline | diff | stl | diff_stl
+  seed: 0
+  num_envs: 64            # overrides top-level num_envs for eval
+  num_rollouts: 5         # total episodes = num_envs * num_rollouts
+  terrain_rows: 8
+  terrain_cols: 8
+  save_trace_k: 16        # first K episodes' per-step traces persisted
+  out_root: ${base}/exp_results/eval
+
 hydra:
   run:
     dir: .
