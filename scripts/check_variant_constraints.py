@@ -22,7 +22,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--variants_path", required=True)
     p.add_argument("--ref_path", required=True)
-    p.add_argument("--fps", type=float, default=50.0)
+    p.add_argument("--fps", type=float, default=None)
     p.add_argument("--max_pos_err", type=float, default=1e-3, help="m, FK self-consistency")
     p.add_argument("--max_rpy_err", type=float, default=1e-3, help="rad, FK self-consistency")
     p.add_argument("--max_speed", type=float, default=4.0, help="m/s, base")
@@ -36,17 +36,22 @@ def main():
     blob = torch.load(args.variants_path)
     variants = blob["variants"] if isinstance(blob, dict) and "variants" in blob else blob
     ref = torch.load(args.ref_path)
+    meta = blob.get("meta", {}) if isinstance(blob, dict) else {}
+    fps = float(args.fps) if args.fps is not None else float(meta.get("fps", 50.0))
 
     urdf_kwargs = {"urdf_path": args.urdf_path} if args.urdf_path else {}
     fk = G1FK(device=args.device, **urdf_kwargs)
-    fk_link_names = blob.get("meta", {}).get("link_names") if isinstance(blob, dict) else None
+    fk_link_names = meta.get("link_names") if isinstance(meta, dict) else None
     if fk_link_names is None:
         fk_link_names = list(fk.link_names)
 
     print(f"checking {len(variants)} variants against ref {args.ref_path}")
+    print(f"[meta] version={meta.get('version', 'n/a')} fps={fps} sdedit_t_start={meta.get('sdedit_t_start', 'n/a')}")
+    if "constraints" in meta:
+        print(f"[meta] constraints={meta['constraints']}")
     print(f"[fk] using {len(fk_link_names)} links (meta={fk_link_names is not None})")
 
-    dt = 1.0 / args.fps
+    dt = 1.0 / fps
     n_ok = 0
     for i, v in enumerate(variants):
         errs = []

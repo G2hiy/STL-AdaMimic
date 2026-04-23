@@ -226,6 +226,7 @@ def test_far_jump_auto_dispatch():
 # ---------------------------------------------------------------------------
 def main():
     torch.manual_seed(0)
+    print("[usage] Run `python scripts/check_stl_specs.py` before Stage 1 training with use_stl_reward=true.")
     tests = [
         ("DSL autograd",                     test_dsl_autograd),
         ("Not / Or shape + values",          test_not_or_shape),

@@ -246,6 +246,45 @@ def _self_consistency_main():
         for i, (n, e) in enumerate(zip(names, per_link_pos.tolist())):
             print(f"  {i:3d} {n:<40s} {e:.4f} m")
 
+        # ── Frame-0 诊断: 定位 convention 问题 ──────────────────────────────
+        print("\n[diag frame-0]")
+        print(f"  base_pos[0] = {base_pos[0].tolist()}")
+        print(f"  base_rpy[0] = {base_rpy[0].tolist()}  (max |rpy| over T = "
+              f"{base_rpy.abs().max().item():.3f} rad)")
+        print(f"  joint_27[0] range: min={joint_27[0].min().item():+.3f} "
+              f"max={joint_27[0].max().item():+.3f}")
+        # 检查 joint 单位: 弧度 or 角度? 人形关节极少超过 ±π, 若 > 3.5 大概率是度
+        if joint_27.abs().max().item() > 3.5:
+            print("  [WARN] joint_27 max > 3.5, 可能是角度而非弧度")
+        print("  frame-0 per-link pos (ref vs fk, delta):")
+        for k, name in enumerate(names):
+            rp = ref_link_pos[0, k].tolist()
+            fp = link_pos[0, k].tolist()
+            d = (ref_link_pos[0, k] - link_pos[0, k]).norm().item()
+            print(f"    {k:2d} {name:<32s} ref=[{rp[0]:+.3f},{rp[1]:+.3f},{rp[2]:+.3f}]  "
+                  f"fk=[{fp[0]:+.3f},{fp[1]:+.3f},{fp[2]:+.3f}]  |Δ|={d:.3f}")
+
+        # ── 控制实验: base_rpy 置零, 只看 joint→link 映射是否对 ──────────
+        print("\n[diag] 控制实验 A: base_rpy=0, 只看 joint→link 局部 FK")
+        lp0_z, _, _ = fk(
+            base_pos.unsqueeze(0),
+            torch.zeros_like(base_rpy).unsqueeze(0),
+            joint_27.unsqueeze(0),
+        )
+        # 把 ref 的 link_pos 也"去掉 base_rpy 旋转": 假设 ref 用 intrinsic xyz
+        R_wb_ref = intrinsic_xyz_to_rotmat(base_rpy.unsqueeze(0))  # (1, T, 3, 3)
+        R_bw_ref = R_wb_ref.transpose(-1, -2)
+        rel_ref = ref_link_pos - base_pos[:, None, :]              # (T, L, 3)
+        # R_bw · rel_ref → link 在 base 原姿态 frame 下的位置
+        rel_ref_base = torch.einsum("tij,tkj->tki", R_bw_ref.squeeze(0), rel_ref)
+        lp0_z = lp0_z.squeeze(0)
+        # 和 fk 结果对比 (fk 结果 = R_I·t_bl + base_pos, 即 link 位置 = base_pos + t_bl)
+        rel_fk = lp0_z - base_pos[:, None, :]                      # (T, L, 3)
+        diff_rel = (rel_fk - rel_ref_base).norm(dim=-1).mean(dim=0)
+        print("  mean err (rotate-out base_rpy) per link:")
+        for k, (n, e) in enumerate(zip(names, diff_rel.tolist())):
+            print(f"    {k:2d} {n:<32s} {e:.3f} m")
+
     if args.dump_reorder is None:
         print("[fail] direct order mismatch and --dump_reorder not set; abort.")
         raise SystemExit(1)

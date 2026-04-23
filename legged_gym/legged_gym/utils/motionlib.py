@@ -9,6 +9,23 @@ from tqdm import tqdm
 from legged_gym.utils.math import euler_xyz_to_quat, quat_to_euler_xyz, quat_mul, quat_mul_yaw, quat_rotate_inverse, quat_mul_inverse
 
 
+DIFFUSION_REQUIRED_KEYS = {
+    "base_position",
+    "base_pose",
+    "joint_position",
+    "link_position",
+    "link_orientation",
+    "link_velocity",
+    "link_angular_velocity",
+}
+
+DIFFUSION_OPTIONAL_KEYS = {
+    "base_velocity",
+    "base_angular_velocity",
+    "joint_velocity",
+}
+
+
 def euler_from_quaternion(quat_angle):
     """
     Convert a quaternion into euler angles (roll, pitch, yaw)
@@ -60,6 +77,48 @@ def load_imitation_dataset(folder, mapping="joint_id.txt", suffix=".pt"):
     return dataset_list, joint_id_dict
 
 
+def inspect_diffusion_variant_bundle(path):
+    """Inspect a pre-generated diffusion bundle and return variants plus a summary."""
+    if not os.path.isabs(path):
+        current_file_dir = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.normpath(os.path.join(current_file_dir, path))
+    blob = torch.load(path)
+    variants = blob["variants"] if isinstance(blob, dict) and "variants" in blob else blob
+    assert isinstance(variants, list) and len(variants) > 0, f"empty variants at {path}"
+
+    required = set(DIFFUSION_REQUIRED_KEYS)
+    optional = set(DIFFUSION_OPTIONAL_KEYS)
+    missing = required - set(variants[0].keys())
+    assert not missing, f"variant 0 missing keys: {missing}"
+
+    ref_shape = {
+        key: tuple(value.shape) if hasattr(value, "shape") else None
+        for key, value in variants[0].items()
+        if key in required | optional
+    }
+    for idx, variant in enumerate(variants[1:], start=1):
+        variant_missing = required - set(variant.keys())
+        assert not variant_missing, f"variant {idx} missing keys: {variant_missing}"
+        for key, shape in ref_shape.items():
+            if key not in variant:
+                continue
+            cur_shape = tuple(variant[key].shape) if hasattr(variant[key], "shape") else None
+            assert cur_shape == shape, (
+                f"variant {idx} key '{key}' shape {cur_shape} != variant 0 shape {shape}"
+            )
+
+    meta = blob.get("meta", {}) if isinstance(blob, dict) else {}
+    summary = {
+        "path": path,
+        "num_variants": len(variants),
+        "required_keys": sorted(required),
+        "optional_keys_present": sorted(optional & set(variants[0].keys())),
+        "variant0_shapes": ref_shape,
+        "meta": meta,
+    }
+    return variants, summary
+
+
 def load_diffusion_variants(path):
     """Load pre-generated diffusion variants (.pt) as a list of data dicts.
 
@@ -70,6 +129,9 @@ def load_diffusion_variants(path):
     constraint ``joint_position == reference_joint_position`` is the
     generator's responsibility; this loader performs no rewriting.
     """
+    variants, _ = inspect_diffusion_variant_bundle(path)
+    return variants
+
     if not os.path.isabs(path):
         current_file_dir = os.path.dirname(os.path.abspath(__file__))
         path = os.path.normpath(os.path.join(current_file_dir, path))

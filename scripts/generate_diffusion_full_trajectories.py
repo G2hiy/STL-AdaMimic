@@ -329,6 +329,13 @@ def main():
             num_inference_steps=args.num_inference_steps,
             joint_dev_log=joint_dev_log,
             link_names=link_names,
+            constraints=dict(
+                max_speed=args.max_speed,
+                max_accel=args.max_accel,
+                min_height=args.min_height,
+            ),
+            num_variants_requested=args.num_variants,
+            num_variants_kept=len(kept_variants),
             version="full_sdedit_v1",
         ),
     }, args.output)

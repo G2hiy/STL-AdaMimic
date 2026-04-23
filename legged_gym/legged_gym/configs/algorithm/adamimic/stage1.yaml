@@ -20,7 +20,10 @@ algorithm:
   # --- 创新点① Diffusion 参考增强（默认关闭，不影响 ablation 路径） ---
   use_diffusion_ref: false
   diffusion_ref_path: ${base}/resources/dataset/g1_dof27_data_diff/${task_id}/variants.pt
-  diffusion_sample_policy: random   # random | curriculum
+  diffusion_sample_policy: random   # only `random` is implemented in this branch
+  # Hydra reminder:
+  #   algorithm.algorithm.use_diffusion_ref=true
+  #   algorithm.algorithm.diffusion_ref_path=/abs/path/to/variants.pt
 
   # --- 创新点② 真 STL 连续奖励（替换 Stage 1 稀疏全局奖励 r_k^global） ---
   # 启用方式：algorithm.algorithm.use_stl_reward=true 且

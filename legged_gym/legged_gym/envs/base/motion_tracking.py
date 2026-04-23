@@ -59,7 +59,8 @@ from legged_gym.utils.motionlib import (
     MotionLib,
     MotionLibAMP,
     load_imitation_dataset,
-    load_diffusion_variants
+    load_diffusion_variants,
+    inspect_diffusion_variant_bundle,
 )
 
 
@@ -166,6 +167,11 @@ class LeggedRobot(BaseTask):
         self._stl_rho_cache = None
         self._stl_reward_cache = None
         self.stl_replace_sparse_tracking = False
+        self.stl_sparse_scale = 0.0
+        self.diffusion_ref_enabled = bool(getattr(self.cfg.algorithm, "use_diffusion_ref", False))
+        self.diffusion_sample_policy = str(getattr(self.cfg.algorithm, "diffusion_sample_policy", "random")).lower()
+        self.diffusion_ref_meta = {}
+        self.diffusion_num_variants = 0
         if self.use_stl_reward:
             from legged_gym.utils.stl_tasks import TASK_SPECS
             task_id = self.cfg.dataset.task_id
@@ -182,6 +188,9 @@ class LeggedRobot(BaseTask):
             self.stl_rho_scale = float(getattr(self.cfg.algorithm, "stl_rho_scale", 0.2))
             self.stl_replace_sparse_tracking = bool(
                 getattr(self.cfg.algorithm, "stl_replace_sparse_tracking", True)
+            )
+            self.stl_sparse_scale = float(
+                getattr(self.cfg.rewards.scales, f"sparse_stl_{self.task_id}", 0.0)
             )
 
     def step(self, actions):
@@ -670,6 +679,11 @@ class LeggedRobot(BaseTask):
         self.extras["episode"] = {}
         self.extras['env'] = {}
         self.extras["env"]['motion_time'] = self.motion_time[env_ids].mean()
+        self.extras["env"]["diffusion/enabled"] = torch.tensor(float(self.diffusion_ref_enabled), dtype=torch.float)
+        self.extras["env"]["diffusion/num_variants"] = torch.tensor(float(self.diffusion_num_variants), dtype=torch.float)
+        self.extras["env"]["stl/enabled"] = torch.tensor(float(self.use_stl_reward), dtype=torch.float)
+        self.extras["env"]["stl/replace_sparse_tracking"] = torch.tensor(float(self.stl_replace_sparse_tracking), dtype=torch.float)
+        self.extras["env"]["stl/sparse_scale"] = torch.tensor(float(self.stl_sparse_scale), dtype=torch.float)
         
         motion_time = self.motions.get_motion_time(self.motion_ids)[:]
         self.extras["time_outs"] = self.time_out_buf
@@ -950,9 +964,8 @@ class LeggedRobot(BaseTask):
         #   (1) 跳过原 r_k^global 硬编码项；
         #   (2) 将 tanh(ρ/scale) 作为新的 r_k^global 注入高层 sparse 通道。
         if self.use_stl_reward and self.stl_ctx is not None and self.stl_replace_sparse_tracking:
-            stl_hi_scale = float(self.reward_scales.get(f"sparse_stl_{self.task_id}", 0.0))
-            if stl_hi_scale != 0.0 and self._stl_reward_cache is not None:
-                self.rew_buf_high[:, self.reward_groups.index('sparse')] += self._stl_reward_cache * stl_hi_scale
+            if self.stl_sparse_scale != 0.0 and self._stl_reward_cache is not None:
+                self.rew_buf_high[:, self.reward_groups.index('sparse')] += self._stl_reward_cache * self.stl_sparse_scale
         else:
             self.rew_buf_high[:, self.reward_groups.index('sparse')] += -torch.norm(self.dif_global_body_pos, dim=-1).mean(dim=-1) * self.is_stage_transition
         # self.rew_buf_high[:, self.reward_groups.index('dense')] += self._reward_tracking_body_position_local() * self._infer_dt() / (self.dt * self.dt_scale)
@@ -1751,6 +1764,27 @@ class LeggedRobot(BaseTask):
         self.init_base_quat[:] = self.base_init_state[3:7]
 
         dataset, mapping = load_imitation_dataset(self.cfg.dataset.folder, self.cfg.dataset.joint_mapping)
+        if self.diffusion_ref_enabled:
+            assert self.cfg.algorithm.diffusion_ref_path is not None, (
+                "use_diffusion_ref=true but diffusion_ref_path is not configured"
+            )
+            if self.diffusion_sample_policy != "random":
+                raise NotImplementedError(
+                    "algorithm.diffusion_sample_policy only supports 'random' in this branch; "
+                    f"got {self.diffusion_sample_policy!r}"
+                )
+            _, diffusion_summary = inspect_diffusion_variant_bundle(
+                self.cfg.algorithm.diffusion_ref_path
+            )
+            self.diffusion_ref_meta = diffusion_summary["meta"]
+            self.diffusion_num_variants = diffusion_summary["num_variants"]
+            if self.diffusion_ref_meta:
+                print(
+                    "[diffusion] expected meta: "
+                    f"version={self.diffusion_ref_meta.get('version', 'n/a')} "
+                    f"fps={self.diffusion_ref_meta.get('fps', 'n/a')} "
+                    f"sdedit_t_start={self.diffusion_ref_meta.get('sdedit_t_start', 'n/a')}"
+                )
 
         # 创新点①: 若启用 diffusion 参考，把 variants 拼到 dataset 末尾，
         # 让 MotionLib 以统一方式处理；原 motion 仍在 dataset[0:N_base]。
@@ -3055,6 +3089,8 @@ class LeggedRobot(BaseTask):
         self._stl_rho_cache = rho
         self._stl_reward_cache = torch.tanh(rho / max(self.stl_rho_scale, 1e-6))
         self.extras.setdefault("env", {})
+        self.extras["env"]["stl/rho_scale"] = torch.tensor(float(self.stl_rho_scale), dtype=torch.float)
+        self.extras["env"]["stl/sparse_scale"] = torch.tensor(float(self.stl_sparse_scale), dtype=torch.float)
         self.extras["env"]["stl/rho_mean"] = rho.mean()
         self.extras["env"]["stl/rho_pos_rate"] = (rho > 0).float().mean()
 
