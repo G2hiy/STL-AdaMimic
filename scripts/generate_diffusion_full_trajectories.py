@@ -1,16 +1,20 @@
-"""生成 D_ref^diff (创新点① 完整版 S3).
+"""生成 D_ref^diff (创新点① 完整版).
 
-核心创新: inpainting-guided sampling.
-    在去噪循环的每一步, 把已知通道 (joint_27, 可选 base_rpy) 替换为
-    "加噪到当前 t 的 ref", 让模型在未知通道 (base_pos) 上演化,
-    同时被真实 AMASS 学到的"关节-根耦合先验"约束.
+核心: **SDEdit** 风格采样 — 把 ref 归一化后加噪到 t₀, 再从 t₀ denoise 到 0,
+    三路通道 (joint_27 | base_pos | base_rpy) 同时自由演化. 条件 Δp 控制偏离方向.
+
+与旧"纯自由+ref joint inpaint"路线的差异:
+    - 不再用 ref joint 做 inpaint (AMASS vs task-ref OOD 会破坏 base_pos 预测,
+      实测 speed 73 m/s → 自由生成 4.5 m/s).
+    - 从 ref 出发加噪到中等 t₀, 保留 ref 语义 (跳远姿态) 的同时让 AMASS 先验
+      引导 joint/base 协同变化.
 
 输入:
-    --ckpt_path   train_diffusion_full.py 的产物 (含 model_config / scheduler_config / norm_stats)
-    --ref_path    基准 data.pt (提供 joint_position / base_pose / link_*)
-    --output      .pt 输出路径
+    --ckpt_path   train_diffusion_full 产物 (含 model_config / scheduler_config / norm_stats)
+    --ref_path    基准 data.pt
+    --output      .pt 输出
 
-输出 (与 motionlib.load_diffusion_variants 约定一致):
+输出 (与 motionlib.load_diffusion_variants 对齐):
     {
       "variants": [
         dict(base_position, base_pose, base_velocity, base_angular_velocity,
@@ -21,20 +25,18 @@
       ],
       "meta": {...}
     }
-
-第一版默认: --inpaint_rpy=True --freeze_rpy=True
-    (rpy 完全冻结; 与 MVP 做严格单变量 A/B: 唯一差异是 AMASS 真实耦合先验)
-
-第二版 (独立立项): --no-inpaint_rpy --no-freeze_rpy + pytorch_kinematics FK 重算 link_orientation
 """
 
 import argparse
+import math
 import os
+
 import torch
 from diffusers import DDPMScheduler
 
 from legged_gym.diffusion.root_mdm import RootDiffusionModel
 from legged_gym.diffusion.filter import kinematic_filter
+from legged_gym.diffusion.fk import G1FK
 
 
 TRAJ_DIM = 33
@@ -54,20 +56,17 @@ def parse_args():
     p.add_argument("--overgenerate_ratio", type=float, default=4.0)
     p.add_argument("--max_rounds", type=int, default=5)
     p.add_argument("--num_inference_steps", type=int, default=50)
+    p.add_argument("--sdedit_t_start", type=int, default=500,
+                   help="SDEdit 加噪起点 t₀ ∈ [1, num_train_timesteps-1]. 500/1000 ≈ 中等保留 ref 结构.")
     p.add_argument("--max_speed", type=float, default=4.0)
     p.add_argument("--max_accel", type=float, default=30.0)
     p.add_argument("--min_height", type=float, default=0.05)
     p.add_argument("--fps", type=float, default=50.0,
                    help="data.pt 真实 50fps; 用于 link_velocity/base_velocity 有限差分")
+    p.add_argument("--urdf_path", default=None,
+                   help="G1 URDF; 默认用 legged_gym.diffusion.fk 里的 DEFAULT_URDF")
     p.add_argument("--device", default="cuda")
     p.add_argument("--seed", type=int, default=0)
-    # 第一版 gates (均默认 True)
-    p.add_argument("--inpaint_rpy", action="store_true", default=True,
-                   help="ref_rpy 作为 known 通道参与 inpainting (第一版默认 True)")
-    p.add_argument("--no-inpaint_rpy", dest="inpaint_rpy", action="store_false")
-    p.add_argument("--freeze_rpy", action="store_true", default=True,
-                   help="后处理强制 base_rpy=ref (第一版默认 True)")
-    p.add_argument("--no-freeze_rpy", dest="freeze_rpy", action="store_false")
     return p.parse_args()
 
 
@@ -97,100 +96,91 @@ def load_model(ckpt_path: str, device: torch.device):
     return model, scheduler, blob
 
 
-def build_known_template(
-    ref_joint_27: torch.Tensor,         # (T, 27)
-    ref_rpy: torch.Tensor,              # (T, 3)
-    mean: torch.Tensor,                 # (33,)
-    std: torch.Tensor,                  # (33,)
-) -> torch.Tensor:
-    """构造 (T, 33) 归一化空间 known 模板; base_pos 通道填 0 (不 inpaint)."""
-    T = ref_joint_27.shape[0]
-    known = torch.zeros(T, TRAJ_DIM, dtype=torch.float32)
-    known[:, JOINT_SLICE] = (ref_joint_27 - mean[JOINT_SLICE]) / std[JOINT_SLICE]
-    known[:, BASE_RPY_SLICE] = (ref_rpy - mean[BASE_RPY_SLICE]) / std[BASE_RPY_SLICE]
-    return known
-
-
 def wrap_to_pi(x: torch.Tensor) -> torch.Tensor:
-    """角度差值 wrap 到 (-π, π], 用于 rpy 有限差分."""
-    import math
+    """角度差值 wrap 到 (-π, π]."""
     return (x + math.pi) % (2 * math.pi) - math.pi
 
 
 @torch.no_grad()
-def sample_inpainting(
+def sample_sdedit(
     model: RootDiffusionModel,
     scheduler: DDPMScheduler,
-    conds: torch.Tensor,                # (M, 3) 归一化空间
-    x_known_norm: torch.Tensor,         # (T, 33) 归一化空间
-    mask_known: torch.Tensor,           # (33,) bool
+    conds: torch.Tensor,           # (M, cond_dim) 归一化空间
+    x_ref_norm: torch.Tensor,      # (T, 33) 归一化空间 ref
+    t_start: int,
     num_inference_steps: int,
     device: torch.device,
 ) -> torch.Tensor:
-    """Inpainting 去噪: 已知通道在每一步替换为加噪 ref, 未知通道自由演化.
-
-    返回 (M, T, 33) 归一化空间.
-    """
+    """SDEdit: 把 ref 加噪到 t₀, 再 denoise 到 0. 返回 (M, T, 33) 归一化空间."""
     M = conds.shape[0]
-    T = x_known_norm.shape[0]
-    x = torch.randn(M, T, TRAJ_DIM, device=device)
-    x_known_dev = x_known_norm.to(device).unsqueeze(0).expand(M, -1, -1)
-    mask_dev = mask_known.to(device)
-
+    T = x_ref_norm.shape[0]
     scheduler.set_timesteps(num_inference_steps, device=device)
-    for t in scheduler.timesteps:
+    timesteps = scheduler.timesteps  # 降序 [T_max-1, …, 0]
+
+    # 找到 <= t_start 的第一个 timestep (denoise 起点)
+    start_mask = timesteps <= t_start
+    start_idx = int(start_mask.nonzero()[0].item()) if start_mask.any() else 0
+    t0 = int(timesteps[start_idx].item())
+
+    x_ref_dev = x_ref_norm.to(device).unsqueeze(0).expand(M, -1, -1).contiguous()  # (M, T, 33)
+    ts_add = torch.full((M,), t0, dtype=torch.long, device=device)
+    noise = torch.randn_like(x_ref_dev)
+    x = scheduler.add_noise(x_ref_dev, noise, ts_add)
+
+    conds_dev = conds.to(device)
+    for t in timesteps[start_idx:]:
         ts = torch.full((M,), int(t.item()), dtype=torch.long, device=device)
-        # 已知通道 = 加噪到 t 的 ref
-        noise_ref = torch.randn_like(x_known_dev)
-        x_known_t = scheduler.add_noise(x_known_dev, noise_ref, ts)
-        x = torch.where(mask_dev[None, None, :], x_known_t, x)
-        eps = model(x, ts, conds.to(device))
+        eps = model(x, ts, conds_dev)
         x = scheduler.step(eps, t, x).prev_sample
-    # 最后一步也投影一次, 保证输出上已知通道严格等于 ref (归一化空间)
-    x = torch.where(mask_dev[None, None, :], x_known_dev, x)
     return x
 
 
 def build_variant(
     ref: dict,
-    new_base_pos: torch.Tensor,         # (T, 3) 原始空间
-    new_base_rpy: torch.Tensor,         # (T, 3) 原始空间
+    new_joint_27: torch.Tensor,    # (T, 27) 原始空间
+    new_base_pos: torch.Tensor,    # (T, 3)
+    new_base_rpy: torch.Tensor,    # (T, 3)
+    fk: G1FK,
     fps: float,
+    link_names: list,
 ) -> dict:
-    """式 3 + 第一版保守近似.
+    """用 FK 重算 link_pose, 派生速度场全部有限差分."""
+    T = new_joint_27.shape[0]
+    # FK (1, T, ...)
+    link_pos, link_rpy, _ = fk(
+        new_base_pos.unsqueeze(0), new_base_rpy.unsqueeze(0), new_joint_27.unsqueeze(0),
+        target_link_names=link_names,
+    )
+    link_pos = link_pos.squeeze(0).to(new_base_pos.dtype).cpu()    # (T, L, 3)
+    link_rpy = link_rpy.squeeze(0).to(new_base_pos.dtype).cpu()    # (T, L, 3)
 
-    第一版 (freeze_rpy=True):
-        new_base_rpy ≡ ref_rpy → link_orientation 零误差; link_position 平移零误差
-    第二版 (freeze_rpy=False):
-        link_orientation = ref["link_orientation"] 是保守近似 (此处不 FK 重算)
-    """
-    ref_base = ref["base_position"].float()
-    delta = new_base_pos - ref_base                                        # (T, 3)
-    new_link_pos = ref["link_position"].float() + delta[:, None, :]        # (T, N_bodies, 3)
+    # 速度场 (有限差分, 末尾复制最后一帧保持 T)
+    def diff_last_repeat(x, fps_):
+        d = (x[1:] - x[:-1]) * fps_
+        return torch.cat([d, d[-1:]], dim=0)
 
-    # base_angular_velocity: rpy 差分 + wrap
-    drpy = wrap_to_pi(new_base_rpy[1:] - new_base_rpy[:-1]) * fps          # (T-1, 3)
-    new_base_ang_vel = torch.cat([drpy, drpy[-1:]], dim=0)                 # (T, 3)
+    def rpy_diff_last_repeat(x, fps_):
+        d = wrap_to_pi(x[1:] - x[:-1]) * fps_
+        return torch.cat([d, d[-1:]], dim=0)
 
-    # link_velocity / base_velocity: 有限差分
-    v_link = (new_link_pos[1:] - new_link_pos[:-1]) * fps
-    new_link_vel = torch.cat([v_link, v_link[-1:]], dim=0)
-    v_base = (new_base_pos[1:] - new_base_pos[:-1]) * fps
-    new_base_vel = torch.cat([v_base, v_base[-1:]], dim=0)
+    new_joint_vel = diff_last_repeat(new_joint_27, fps)
+    new_base_vel = diff_last_repeat(new_base_pos, fps)
+    new_base_ang_vel = rpy_diff_last_repeat(new_base_rpy, fps)
+    new_link_vel = diff_last_repeat(link_pos, fps)
+    new_link_ang_vel = rpy_diff_last_repeat(link_rpy, fps)
 
-    variant = {
+    return {
         "base_position":         new_base_pos.clone(),
         "base_pose":             new_base_rpy.clone(),
         "base_velocity":         new_base_vel,
         "base_angular_velocity": new_base_ang_vel,
-        "joint_position":        ref["joint_position"].clone(),     # 式 3: 完全拷贝
-        "joint_velocity":        ref["joint_velocity"].clone(),
-        "link_position":         new_link_pos,
-        "link_orientation":      ref["link_orientation"].clone(),   # 第一版零误差 / 第二版保守近似
+        "joint_position":        new_joint_27.clone(),
+        "joint_velocity":        new_joint_vel,
+        "link_position":         link_pos,
+        "link_orientation":      link_rpy,
         "link_velocity":         new_link_vel,
-        "link_angular_velocity": ref["link_angular_velocity"].clone(),
+        "link_angular_velocity": new_link_ang_vel,
     }
-    return variant
 
 
 def main():
@@ -200,84 +190,87 @@ def main():
 
     # --- load model + stats ---
     model, scheduler, blob = load_model(args.ckpt_path, device)
-    mean = blob["norm_stats"]["mean"].float().cpu()                # (33,)
-    std = blob["norm_stats"]["std"].float().cpu()                  # (33,)
+    mean = blob["norm_stats"]["mean"].float().cpu()      # (33,)
+    std = blob["norm_stats"]["std"].float().cpu()        # (33,)
     assert mean.shape == (TRAJ_DIM,) and std.shape == (TRAJ_DIM,)
+    num_train_ts = int(scheduler.config.num_train_timesteps)
+    assert 1 <= args.sdedit_t_start <= num_train_ts - 1, (
+        f"--sdedit_t_start={args.sdedit_t_start} 越界 [1, {num_train_ts-1}]"
+    )
     print(f"[ckpt] loaded {args.ckpt_path}")
+    print(f"       scheduler.num_train_timesteps={num_train_ts}  "
+          f"sdedit_t_start={args.sdedit_t_start}")
     print(f"       norm_stats mean[base_pos]={mean[BASE_POS_SLICE].tolist()}  "
           f"std[base_pos]={std[BASE_POS_SLICE].tolist()}")
 
     # --- load ref ---
     ref = torch.load(args.ref_path)
-    ref_base_pos = ref["base_position"].float()                    # (T, 3)
-    ref_rpy = ref["base_pose"].float()                             # (T, 3)
-    ref_joint = ref["joint_position"].float()                      # (T, 27) — 已是 27-DoF
+    ref_base_pos = ref["base_position"].float()
+    ref_rpy = ref["base_pose"].float()
+    ref_joint = ref["joint_position"].float()
     T_ref = ref_base_pos.shape[0]
-    assert ref_joint.shape[1] == 27, \
-        f"ref['joint_position'] 需为 27-DoF, 实际 {ref_joint.shape[1]}"
+    assert ref_joint.shape[1] == 27, f"ref joint_position shape={ref_joint.shape}"
     print(f"[ref]  T={T_ref}  fps={args.fps}")
 
-    # --- inpainting 模板 + mask ---
-    x_known_norm = build_known_template(ref_joint, ref_rpy, mean, std)     # (T, 33)
-    mask_known = torch.zeros(TRAJ_DIM, dtype=torch.bool)
-    mask_known[JOINT_SLICE] = True
-    if args.inpaint_rpy:
-        mask_known[BASE_RPY_SLICE] = True
-    print(f"[inpaint] known channels: joint_27 = True, base_rpy = {args.inpaint_rpy}, "
-          f"base_pos = False (free)")
-    print(f"[post]    freeze_rpy = {args.freeze_rpy} (第一版默认 True)")
+    # --- FK (CPU 足够快, 避免 CUDA 同步) ---
+    urdf_kwargs = {"urdf_path": args.urdf_path} if args.urdf_path else {}
+    fk = G1FK(device="cpu", **urdf_kwargs)
+    link_names = list(fk.link_names)
+    print(f"[fk]   N_links={len(link_names)}  (first 5: {link_names[:5]})")
+
+    # --- 归一化空间 ref ---
+    ref_stack = torch.cat([ref_joint, ref_base_pos, ref_rpy], dim=-1)   # (T, 33)
+    x_ref_norm = (ref_stack - mean[None, :]) / std[None, :]             # (T, 33)
 
     # --- 条件采样范围 (原始 → 归一化) ---
-    rng_raw = parse_delta_p_range(args.delta_p_range)                      # (2, 3) 原始空间
-    # Δp 条件是归一化空间 base_pos 位移 → 归一化系数 = 1 / std[base_pos]
+    rng_raw = parse_delta_p_range(args.delta_p_range)                   # (2, 3)
     base_pos_std = std[BASE_POS_SLICE]
     rng_norm = rng_raw / base_pos_std[None, :]
     print(f"[cond] Δp range raw low={rng_raw[0].tolist()} high={rng_raw[1].tolist()}")
     print(f"       Δp range norm low={rng_norm[0].tolist()} high={rng_norm[1].tolist()}")
 
-    # --- 生成 + 过滤循环 ---
+    # --- 生成循环 ---
     n_target = args.num_variants
-    kept_variants: list[dict] = []
-    kept_cond: list[torch.Tensor] = []
-    inpaint_err_log: list[float] = []
+    kept_variants: list = []
+    kept_cond: list = []
+    joint_dev_log: list = []
 
     for rd in range(args.max_rounds):
         n_gen = int(n_target * args.overgenerate_ratio) - len(kept_variants)
         if n_gen <= 0:
             break
-        conds_norm = sample_conditions(n_gen, rng_norm)                    # (n_gen, 3) 归一化空间
-        x_norm = sample_inpainting(
-            model, scheduler, conds_norm, x_known_norm, mask_known,
-            args.num_inference_steps, device,
-        ).cpu()                                                            # (n_gen, T, 33)
 
-        # 反归一化
-        x_denorm = x_norm * std[None, None, :] + mean[None, None, :]       # (n_gen, T, 33)
-        gen_joint = x_denorm[:, :, JOINT_SLICE]                            # (n_gen, T, 27)
-        gen_base_pos = x_denorm[:, :, BASE_POS_SLICE]                      # (n_gen, T, 3)
-        gen_base_rpy = x_denorm[:, :, BASE_RPY_SLICE]                      # (n_gen, T, 3)
+        conds_norm = sample_conditions(n_gen, rng_norm)                 # (n_gen, 3)
+        x_norm = sample_sdedit(
+            model, scheduler, conds_norm, x_ref_norm,
+            t_start=args.sdedit_t_start,
+            num_inference_steps=args.num_inference_steps,
+            device=device,
+        ).cpu()                                                         # (n_gen, T, 33)
 
-        # World frame 映射: AMASS retargeted 数据的 base_z 基准 ≈ 0, 和 G1 ref 绝对高度 (~0.75m) 错位.
-        # 每条 variant 起点归零再加 ref 起点, 把轨迹平移到 ref 所在 world frame.
-        # 这也是 MVP 做法 (generate_diffusion_trajectories.py:174-175).
+        x_denorm = x_norm * std[None, None, :] + mean[None, None, :]    # (n_gen, T, 33)
+        gen_joint = x_denorm[:, :, JOINT_SLICE]                         # (n_gen, T, 27)
+        gen_base_pos = x_denorm[:, :, BASE_POS_SLICE]                   # (n_gen, T, 3)
+        gen_base_rpy = x_denorm[:, :, BASE_RPY_SLICE]                   # (n_gen, T, 3)
+
+        # SDEdit 起点本就是 ref, 理论上 base_pos[0] 已在 ref[0] 附近; 再做一次零漂校正
         gen_base_pos = gen_base_pos - gen_base_pos[:, 0:1, :] + ref_base_pos[0:1, :].unsqueeze(0)
 
-        # 诊断: inpaint 后 joint 应 ≈ ref (硬投影前)
-        inpaint_err = (gen_joint - ref_joint.unsqueeze(0)).norm(dim=-1).mean().item()
-        inpaint_err_log.append(inpaint_err)
-        z_min = gen_base_pos[:, :, 2].min().item()
-        z_max = gen_base_pos[:, :, 2].max().item()
-        print(f"[round {rd}] n_gen={n_gen}  inpaint_err(joint)={inpaint_err:.4f}  "
-              f"base_z range=[{z_min:.3f}, {z_max:.3f}]m")
+        joint_dev = (gen_joint - ref_joint.unsqueeze(0)).norm(dim=-1).mean().item()
+        joint_dev_log.append(joint_dev)
 
-        # 诊断: 分别检查 speed/accel/height, 定位是哪一项卡住
+        # 诊断: speed/accel/height
         dt = 1.0 / args.fps
-        v_diag = (gen_base_pos[:, 1:] - gen_base_pos[:, :-1]) / dt              # (n_gen, T-1, 3)
-        a_diag = (v_diag[:, 1:] - v_diag[:, :-1]) / dt                          # (n_gen, T-2, 3)
-        speed_max = v_diag.norm(dim=-1).max(dim=-1).values                      # (n_gen,)
-        accel_max = a_diag.norm(dim=-1).max(dim=-1).values                      # (n_gen,)
+        v_diag = (gen_base_pos[:, 1:] - gen_base_pos[:, :-1]) / dt
+        a_diag = (v_diag[:, 1:] - v_diag[:, :-1]) / dt
+        speed_max = v_diag.norm(dim=-1).max(dim=-1).values
+        accel_max = a_diag.norm(dim=-1).max(dim=-1).values
         ref_v = (ref_base_pos[1:] - ref_base_pos[:-1]) / dt
         ref_a = (ref_v[1:] - ref_v[:-1]) / dt
+        z_min = gen_base_pos[:, :, 2].min().item()
+        z_max = gen_base_pos[:, :, 2].max().item()
+        print(f"[round {rd}] n_gen={n_gen}  joint_dev_to_ref={joint_dev:.3f} (rad/frame·sqrt27)  "
+              f"base_z=[{z_min:.3f},{z_max:.3f}]m")
         print(f"           speed_max: p50={speed_max.median():.2f} p95={speed_max.quantile(0.95):.2f} "
               f"| ref_max={ref_v.norm(dim=-1).max():.2f} m/s  (thr={args.max_speed})")
         print(f"           accel_max: p50={accel_max.median():.1f} p95={accel_max.quantile(0.95):.1f} "
@@ -297,27 +290,27 @@ def main():
         for k in idx_pass:
             if len(kept_variants) >= n_target:
                 break
-            new_base_pos = gen_base_pos[k]                                 # (T, 3)
-            new_base_rpy = ref_rpy.clone() if args.freeze_rpy else gen_base_rpy[k].clone()
-            v = build_variant(ref, new_base_pos, new_base_rpy, args.fps)
-            # 式 3 断言
-            assert torch.equal(v["joint_position"], ref["joint_position"]), \
-                "joint_position 未保持不变!"
-            if args.freeze_rpy:
-                assert torch.equal(v["base_pose"], ref["base_pose"]), \
-                    "freeze_rpy=True 但 base_pose 与 ref 不一致!"
+            v = build_variant(
+                ref=ref,
+                new_joint_27=gen_joint[k],
+                new_base_pos=gen_base_pos[k],
+                new_base_rpy=gen_base_rpy[k],
+                fk=fk,
+                fps=args.fps,
+                link_names=link_names,
+            )
             kept_variants.append(v)
             kept_cond.append(conds_norm[k])
         if len(kept_variants) >= n_target:
             break
 
-    assert len(kept_variants) > 0, \
-        "no variants survived; 放宽 --max_speed / --max_accel 或检查 norm_stats"
+    assert len(kept_variants) > 0, (
+        "no variants survived; 放宽 --max_speed/--max_accel, 或降低 --sdedit_t_start"
+    )
     kept_variants = kept_variants[:n_target]
     kept_cond = kept_cond[:n_target]
     print(f"[final] kept {len(kept_variants)} variants")
 
-    # --- 保存 ---
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     torch.save({
         "variants": kept_variants,
@@ -327,9 +320,11 @@ def main():
             conds_norm=torch.stack(kept_cond, dim=0),
             max_speed=args.max_speed, max_accel=args.max_accel,
             min_height=args.min_height, fps=args.fps, T=T_ref,
-            inpaint_rpy=args.inpaint_rpy, freeze_rpy=args.freeze_rpy,
-            inpaint_err_log=inpaint_err_log,
-            version="full_v1",   # 第一版 = rpy 冻结 + 无 FK 重算
+            sdedit_t_start=args.sdedit_t_start,
+            num_inference_steps=args.num_inference_steps,
+            joint_dev_log=joint_dev_log,
+            link_names=link_names,
+            version="full_sdedit_v1",
         ),
     }, args.output)
     print(f"[save] {args.output}")
