@@ -636,9 +636,18 @@ class LeggedRobot(BaseTask):
         joint_pos_diff = self.dif_joint_angles
 
         mask = self.is_stage_transition 
-        upper_body_diff_norm = upper_body_diff[mask].norm(dim=-1).mean()
-        lower_body_diff_norm = lower_body_diff[mask].norm(dim=-1).mean()
-        joint_pos_diff_norm = joint_pos_diff.norm(dim=-1).mean()
+        if torch.any(mask):
+            upper_body_diff_norm = upper_body_diff[mask].norm(dim=-1).mean()
+            lower_body_diff_norm = lower_body_diff[mask].norm(dim=-1).mean()
+        else:
+            upper_body_diff_norm = torch.zeros((), device=self.device)
+            lower_body_diff_norm = torch.zeros((), device=self.device)
+        joint_pos_diff_norm = torch.nan_to_num(
+            joint_pos_diff.norm(dim=-1).mean(),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
 
         self.extras['episode']["upper_body_diff_norm"] = upper_body_diff_norm
         self.extras['episode']["lower_body_diff_norm"] = lower_body_diff_norm
