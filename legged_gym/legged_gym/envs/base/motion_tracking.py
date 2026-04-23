@@ -190,12 +190,16 @@ class LeggedRobot(BaseTask):
                 getattr(self.cfg.algorithm, "stl_replace_sparse_tracking", True)
             )
             sparse_key = f"sparse_stl_{task_id}"
-            if not hasattr(self.cfg.rewards.scales, sparse_key):
+            sparse_scale_override = getattr(self.cfg.algorithm, "stl_sparse_reward_scale", None)
+            if sparse_scale_override is not None:
+                self.stl_sparse_scale = float(sparse_scale_override)
+            elif not hasattr(self.cfg.rewards.scales, sparse_key):
                 raise KeyError(
                     f"Missing reward scale '{sparse_key}' in cfg.rewards.scales; "
                     f"available={list(self.cfg.rewards.scales.keys())}"
                 )
-            self.stl_sparse_scale = float(getattr(self.cfg.rewards.scales, sparse_key))
+            else:
+                self.stl_sparse_scale = float(getattr(self.cfg.rewards.scales, sparse_key))
             print(
                 f"[stl] task_id={task_id} sparse_key={sparse_key} "
                 f"stl_sparse_scale={self.stl_sparse_scale} stl_rho_scale={self.stl_rho_scale}"
