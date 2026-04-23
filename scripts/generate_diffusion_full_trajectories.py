@@ -215,8 +215,13 @@ def main():
     # --- FK (CPU 足够快, 避免 CUDA 同步) ---
     urdf_kwargs = {"urdf_path": args.urdf_path} if args.urdf_path else {}
     fk = G1FK(device="cpu", **urdf_kwargs)
-    link_names = list(fk.link_names)
-    print(f"[fk]   N_links={len(link_names)}  (first 5: {link_names[:5]})")
+    # 与 motion_tracking.py:2124 keyframe_names 过滤一致 (只取含 'keyframe' 子串的 link)
+    link_names = list(fk.keyframe_link_names)
+    assert len(link_names) == ref["link_position"].shape[1], (
+        f"FK keyframe links ({len(link_names)}) != ref link_position N_bodies "
+        f"({ref['link_position'].shape[1]}); 检查 URDF 与 data.pt 是否匹配"
+    )
+    print(f"[fk]   N_keyframe_links={len(link_names)}  names={link_names}")
 
     # --- 归一化空间 ref ---
     ref_stack = torch.cat([ref_joint, ref_base_pos, ref_rpy], dim=-1)   # (T, 33)

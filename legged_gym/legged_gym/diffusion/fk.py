@@ -96,9 +96,12 @@ class G1FK:
     forward(base_pos, base_rpy, joint_27)
         -> link_pos (B, T, L, 3), link_rpy (B, T, L, 3), link_names: list[str]
 
-    target_link_names=None 时输出 chain.get_link_names() 全量 (含 fixed-joint 的 child
-    link, 与 Isaac Gym collapse_fixed_joints=false 默认对齐).
+    默认输出 keyframe link 子集 (含 'keyframe' 子串, 与 motion_tracking.py:2124
+    `self.keyframe_names = [s for s in body_names if "keyframe" in s]` 一致, 17 条).
+    target_link_names 显式传入时可覆盖, 全量 60 条通过 self.link_names 获取.
     """
+
+    KEYFRAME_SUBSTR = "keyframe"
 
     def __init__(
         self,
@@ -124,6 +127,7 @@ class G1FK:
         # pk 可能额外要求某些 joint 不在 joint_names_27 (比如 waist_roll/pitch 已锁).
         # 这些没传入的 joint 填 0.
         self.link_names = list(self.chain.get_link_names())
+        self.keyframe_link_names = [n for n in self.link_names if self.KEYFRAME_SUBSTR in n]
         self.device = torch.device(device)
         self.dtype = dtype
 
@@ -158,7 +162,11 @@ class G1FK:
         # fk_out: {link_name: Transform3d} (pk >=0.5) 或 dict of mat (老版)
 
         R_wb = intrinsic_xyz_to_rotmat(br)    # (BT, 3, 3) world ← base
-        links = list(target_link_names) if target_link_names is not None else list(self.link_names)
+        if target_link_names is not None:
+            links = list(target_link_names)
+        else:
+            # 默认输出 keyframe 子集 (motion_tracking.py:2124 同逻辑)
+            links = list(self.keyframe_link_names)
 
         pos_list, rot_list = [], []
         for name in links:
@@ -203,8 +211,10 @@ def _self_consistency_main():
     fk = G1FK(urdf_path=args.urdf_path, device=args.device)
     print(f"[fk] joint_names ({len(fk.joint_names)}): {fk.joint_names}")
     print(f"[fk] pk_joint_names ({len(fk.pk_joint_names)}): {fk.pk_joint_names}")
-    print(f"[fk] link_names ({len(fk.link_names)}): {fk.link_names}")
+    print(f"[fk] keyframe_link_names ({len(fk.keyframe_link_names)}): {fk.keyframe_link_names}")
+    print(f"[fk] all link_names ({len(fk.link_names)}) — first 8: {fk.link_names[:8]}")
 
+    # 默认用 keyframe 子集 (与 motion_tracking.py:2124 一致)
     link_pos, link_rpy, names = fk(
         base_pos.unsqueeze(0), base_rpy.unsqueeze(0), joint_27.unsqueeze(0)
     )
