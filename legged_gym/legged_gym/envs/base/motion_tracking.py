@@ -684,6 +684,9 @@ class LeggedRobot(BaseTask):
         self.extras["env"]["stl/enabled"] = torch.tensor(float(self.use_stl_reward), dtype=torch.float)
         self.extras["env"]["stl/replace_sparse_tracking"] = torch.tensor(float(self.stl_replace_sparse_tracking), dtype=torch.float)
         self.extras["env"]["stl/sparse_scale"] = torch.tensor(float(self.stl_sparse_scale), dtype=torch.float)
+        self.extras["env"]["stl/rho_scale"] = torch.tensor(float(getattr(self, "stl_rho_scale", 0.0)), dtype=torch.float)
+        self.extras["env"]["stl/rho_mean"] = torch.tensor(0.0, dtype=torch.float)
+        self.extras["env"]["stl/rho_pos_rate"] = torch.tensor(0.0, dtype=torch.float)
         
         motion_time = self.motions.get_motion_time(self.motion_ids)[:]
         self.extras["time_outs"] = self.time_out_buf
