@@ -143,6 +143,16 @@ class LeggedRobot(BaseTask):
         if not self.headless:
             self.set_camera(self.cfg.viewer.pos, self.cfg.viewer.lookat)
         self.infer_keyframe_time = self.cfg.algorithm.infer_keyframe_time
+        self.use_stl_reward = bool(getattr(self.cfg.algorithm, "use_stl_reward", False))
+        self.stl_ctx = None
+        self._stl_rho_cache = None
+        self._stl_reward_cache = None
+        self.stl_replace_sparse_tracking = False
+        self.stl_sparse_scale = 0.0
+        self.diffusion_ref_enabled = bool(getattr(self.cfg.algorithm, "use_diffusion_ref", False))
+        self.diffusion_sample_policy = str(getattr(self.cfg.algorithm, "diffusion_sample_policy", "random")).lower()
+        self.diffusion_ref_meta = {}
+        self.diffusion_num_variants = 0
         self._init_buffers()
         self._prepare_reward_function()
         self.init_done = True
@@ -162,16 +172,6 @@ class LeggedRobot(BaseTask):
         self.rsi = self.cfg.algorithm.rsi
 
         # --- 创新点② 真 STL 连续奖励（默认关闭，不影响 ablation 路径） ---
-        self.use_stl_reward = bool(getattr(self.cfg.algorithm, "use_stl_reward", False))
-        self.stl_ctx = None
-        self._stl_rho_cache = None
-        self._stl_reward_cache = None
-        self.stl_replace_sparse_tracking = False
-        self.stl_sparse_scale = 0.0
-        self.diffusion_ref_enabled = bool(getattr(self.cfg.algorithm, "use_diffusion_ref", False))
-        self.diffusion_sample_policy = str(getattr(self.cfg.algorithm, "diffusion_sample_policy", "random")).lower()
-        self.diffusion_ref_meta = {}
-        self.diffusion_num_variants = 0
         if self.use_stl_reward:
             from legged_gym.utils.stl_tasks import TASK_SPECS
             task_id = self.cfg.dataset.task_id
