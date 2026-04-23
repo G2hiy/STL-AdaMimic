@@ -24,6 +24,8 @@ def _spec_load(name: str, path: Path) -> types.ModuleType:
 
 def _load_motionlib_module():
     utils_root = Path(__file__).resolve().parents[1] / "legged_gym" / "legged_gym" / "utils"
+    # Isaac Gym must be imported before any torch import hidden inside math.py / motionlib.py.
+    import isaacgym  # noqa: F401
     math_mod = _spec_load("motionlib_math", utils_root / "math.py")
 
     legged_gym_pkg = types.ModuleType("legged_gym")
