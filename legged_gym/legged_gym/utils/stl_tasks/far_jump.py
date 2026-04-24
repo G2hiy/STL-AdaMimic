@@ -66,6 +66,9 @@ def _resolve_events(cfg) -> Dict[str, float]:
 _FORCE_NORM = 50.0
 
 
+_FORCE_NORM = 50.0
+# Typical contact force peak is ~500 N, so normalized rho is around +/-10;
+# takeoff airborne force is near 0, so normalized rho is around +0.1.
 def _pred_feet_force_upper(f_air: float) -> Predicate:
     """ρ = (f_air − feet_force_z_max) / _FORCE_NORM  (positive ⇔ airborne)."""
     def fn(sig):

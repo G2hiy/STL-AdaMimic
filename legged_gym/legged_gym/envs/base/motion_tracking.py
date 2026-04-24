@@ -1898,6 +1898,23 @@ class LeggedRobot(BaseTask):
             Looks for self._reward_<REWARD_NAME>, where <REWARD_NAME> are names of all non zero reward scales in the cfg.
         """
         # --- 创新点② 启用 STL 替换时，自动关闭原稀疏追踪项 ---
+        if False:
+            _to_zero = (
+                "sparse_tracking_body_position",
+                "sparse_tracking_body_position_feet",
+                "sparse_tracking_body_rot",
+            )
+            for _k in _to_zero:
+                if _k in self.reward_scales:
+                    _was = self.reward_scales[_k]
+                    self.reward_scales[_k] = 0.0
+                    print(f"[stl-replace] zero out reward_scales['{_k}'] (was {_was})", flush=True)
+                else:
+                    print(f"[stl-replace] key '{_k}' NOT in reward_scales — skipped", flush=True)
+        # ---------------------------------------------------------
+
+        # remove zero scales + multiply non-zero ones by dt
+        # --- 创新点② 启用 STL 替换时，自动关闭原稀疏追踪项 ---
         if getattr(self.cfg.algorithm, "use_stl_reward", False) and \
            getattr(self.cfg.algorithm, "stl_replace_sparse_tracking", True):
             _to_zero = (
@@ -1912,7 +1929,6 @@ class LeggedRobot(BaseTask):
                     self.reward_scales[_k] = 0.0
         # ---------------------------------------------------------
 
-        # remove zero scales + multiply non-zero ones by dt
         for key in list(self.reward_scales.keys()):
             scale = self.reward_scales[key]
             if scale==0:

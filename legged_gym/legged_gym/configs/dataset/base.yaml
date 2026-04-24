@@ -79,6 +79,8 @@ rewards:
     # 启用时通过 rewards.scales.sparse_stl_<task>=<w> 覆盖。
     sparse_stl_far_jump: 10.0
 
+    sparse_stl_far_jump: 10.0
+
   only_positive_rewards: false  # if true negative total rewards are clipped at zero (avoids early termination problems)
   soft_dof_pos_limit:  0.98 # percentage of urdf limits, values above this limit are penalized
   soft_dof_vel_limit: 0.98
