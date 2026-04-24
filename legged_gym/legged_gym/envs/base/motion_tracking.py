@@ -200,6 +200,13 @@ class LeggedRobot(BaseTask):
                 )
             else:
                 self.stl_sparse_scale = float(getattr(self.cfg.rewards.scales, sparse_key))
+            if self.use_stl_reward and self.stl_sparse_scale == 0.0:
+                import warnings
+                warnings.warn(
+                    "[stl] stl_sparse_scale is 0.0 while use_stl_reward=true. "
+                    "STL reward will NOT contribute to sparse critic. "
+                    "Set rewards.scales.sparse_stl_<task_id> to a non-zero value."
+                )
             print(
                 f"[stl] task_id={task_id} sparse_key={sparse_key} "
                 f"stl_sparse_scale={self.stl_sparse_scale} stl_rho_scale={self.stl_rho_scale}"
@@ -1890,6 +1897,21 @@ class LeggedRobot(BaseTask):
         """ Prepares a list of reward functions, whcih will be called to compute the total reward.
             Looks for self._reward_<REWARD_NAME>, where <REWARD_NAME> are names of all non zero reward scales in the cfg.
         """
+        # --- 创新点② 启用 STL 替换时，自动关闭原稀疏追踪项 ---
+        if getattr(self.cfg.algorithm, "use_stl_reward", False) and \
+           getattr(self.cfg.algorithm, "stl_replace_sparse_tracking", True):
+            _to_zero = (
+                "sparse_tracking_body_position",
+                "sparse_tracking_body_position_feet",
+                "sparse_tracking_body_rot",
+            )
+            for _k in _to_zero:
+                if _k in self.reward_scales and self.reward_scales[_k] != 0.0:
+                    print(f"[stl-replace] zero out reward_scales['{_k}'] "
+                          f"(was {self.reward_scales[_k]})")
+                    self.reward_scales[_k] = 0.0
+        # ---------------------------------------------------------
+
         # remove zero scales + multiply non-zero ones by dt
         for key in list(self.reward_scales.keys()):
             scale = self.reward_scales[key]

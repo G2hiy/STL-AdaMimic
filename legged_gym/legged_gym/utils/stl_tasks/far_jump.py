@@ -60,17 +60,23 @@ def _resolve_events(cfg) -> Dict[str, float]:
 # ---------------------------------------------------------------------------
 # Predicate factories (closures over constants defined per build)
 # ---------------------------------------------------------------------------
+# 力量纲归一化常数：典型接触力峰值 ~500 N，归一后 ρ ≈ ±10 量级；
+# 起跳空中力近 0，归一后 ρ ≈ +0.1 —— 与长度量纲 (m) 的 predicate 在
+# softmin 中处于同一数量级。
+_FORCE_NORM = 50.0
+
+
 def _pred_feet_force_upper(f_air: float) -> Predicate:
-    """ρ = f_air − feet_force_z_max  (positive ⇔ airborne)."""
+    """ρ = (f_air − feet_force_z_max) / _FORCE_NORM  (positive ⇔ airborne)."""
     def fn(sig):
-        return f_air - sig["feet_force_z_max"]
+        return (f_air - sig["feet_force_z_max"]) / _FORCE_NORM
     return Predicate(fn, name=f"feet_force_max<{f_air}")
 
 
 def _pred_feet_force_lower(f_land: float) -> Predicate:
-    """ρ = feet_force_z_min − f_land  (positive ⇔ both feet in solid contact)."""
+    """ρ = (feet_force_z_min − f_land) / _FORCE_NORM  (positive ⇔ both feet in solid contact)."""
     def fn(sig):
-        return sig["feet_force_z_min"] - f_land
+        return (sig["feet_force_z_min"] - f_land) / _FORCE_NORM
     return Predicate(fn, name=f"feet_force_min>{f_land}")
 
 
