@@ -1,11 +1,11 @@
-"""Root-trajectory Diffusion Model (MVP for 创新点①).
+"""Joint+Root Diffusion Model (创新点① 完整版).
 
-扩散目标: 根平移 base_position[:, :3]  形状 (B, T, 3)
-条件 ψ:    关键帧位置偏移量 Δp ∈ R^3，通过 AdaLN 注入 Transformer 每层
+扩散目标: [joint_27 | base_pos_3 | base_rpy_3] 联合轨迹  形状 (B, T, 33)
+条件 ψ:    关键帧 base_pos 位移 Δp ∈ R^3 (归一化空间)，通过 AdaLN 注入 Transformer 每层
 调度器:    diffusers.DDPMScheduler (cosine, T=1000)
 
-仅建模全局根轨迹；论文式 3 要求的 q^local 不变约束由下游 generate 脚本负责
-（直接拷贝原参考 joint_position）。
+下游 generate 脚本用 SDEdit 采样得到全 33 维变体, 再用 pytorch_kinematics FK 从
+(joint_27, base_pos, base_rpy) 重算 link_pose. 不再有 "joint frozen / inpaint" 假设.
 """
 
 import math
@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 
 
-def _sinusoidal_embedding(values: torch.Tensor, dim: int) -> torch.Tensor:
+def _sinusoidal_embedding(values: torch.Tensor, dim: int) -> torch.Tensor:  # 正弦位置编码
     """Diffusion timestep / 标量条件的 sinusoidal embedding."""
     half = dim // 2
     freqs = torch.exp(
@@ -63,7 +63,7 @@ class RootDiffusionModel(nn.Module):
 
     def __init__(
         self,
-        traj_dim: int = 3,
+        traj_dim: int = 33,
         max_seq_len: int = 512,
         d_model: int = 256,
         n_layers: int = 6,

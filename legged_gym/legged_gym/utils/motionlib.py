@@ -132,58 +132,44 @@ def load_diffusion_variants(path):
     variants, _ = inspect_diffusion_variant_bundle(path)
     return variants
 
-    if not os.path.isabs(path):
-        current_file_dir = os.path.dirname(os.path.abspath(__file__))
-        path = os.path.normpath(os.path.join(current_file_dir, path))
-    blob = torch.load(path)
-    variants = blob["variants"] if isinstance(blob, dict) and "variants" in blob else blob
-    assert isinstance(variants, list) and len(variants) > 0, f"empty variants at {path}"
-    # 与 data.pt 实际 schema 对齐 (不含 framerate, 帧率由 cfg.dataset.frame_rate 提供)
-    required = {"base_position", "base_pose", "joint_position",
-                "link_position", "link_orientation",
-                "link_velocity", "link_angular_velocity"}
-    missing = required - set(variants[0].keys())
-    assert not missing, f"variant 0 missing keys: {missing}"
-    return variants
 
-
-def filter_legal_motion(datasets, data_names, base_height_range, base_roll_range, base_pitch_range, min_time):
+def filter_legal_motion(datasets, data_names, base_height_range, base_roll_range, base_pitch_range, min_time, fps):
+    # data.pt schema: base_pose 是 RPY (T,3), 无 framerate 字段, fps 由调用方 (cfg.dataset.frame_rate) 提供
     legal_datasets, legal_names, total_length, total_time = [], [], 0, 0.0
-    
+
     print("Filtering motion dataset...")
     for data, name in tqdm(zip(datasets, data_names)):
         min_height_ids = np.nonzero(data["base_position"][:, 2] < min(base_height_range))[0]
         max_height_ids = np.nonzero(data["base_position"][:, 2] > max(base_height_range))[0]
-        
-        min_base_roll_ids = np.nonzero(data["base_orientation"][:, 0] < min(base_roll_range))[0]
-        max_base_roll_ids = np.nonzero(data["base_orientation"][:, 0] > max(base_roll_range))[0]
-        
-        min_base_pitch_ids = np.nonzero(data["base_orientation"][:, 1] < min(base_pitch_range))[0]
-        max_base_pitch_ids = np.nonzero(data["base_orientation"][:, 1] > max(base_pitch_range))[0]
-        
+
+        min_base_roll_ids = np.nonzero(data["base_pose"][:, 0] < min(base_roll_range))[0]
+        max_base_roll_ids = np.nonzero(data["base_pose"][:, 0] > max(base_roll_range))[0]
+
+        min_base_pitch_ids = np.nonzero(data["base_pose"][:, 1] < min(base_pitch_range))[0]
+        max_base_pitch_ids = np.nonzero(data["base_pose"][:, 1] > max(base_pitch_range))[0]
+
         illegal_id_list = [min_height_ids, max_height_ids,
             min_base_roll_ids, max_base_roll_ids, min_base_pitch_ids, max_base_pitch_ids,]
         illegal_id_list = [ids for ids in illegal_id_list if ids.shape[0] > 0]
         if len(illegal_id_list) > 0:
-            first_illegal_id = np.amin(np.concatenate(illegal_id_list, axis=0))
-            if first_illegal_id > max(math.ceil(min_time * data["framerate"]), 3):
+            first_illegal_id = int(np.amin(np.concatenate(illegal_id_list, axis=0)))
+            if first_illegal_id > max(math.ceil(min_time * fps), 3):
                 data["base_position"] = data["base_position"][:first_illegal_id]
-                data["base_orientation"] = data["base_orientation"][:first_illegal_id]
+                data["base_pose"] = data["base_pose"][:first_illegal_id]
                 data["joint_position"] = data["joint_position"][:first_illegal_id]
-                    
-                for n in data["link_position"].keys():
-                    data["link_position"][n] = data["link_position"][n][:first_illegal_id]
-                    data["link_orientation"][n] = data["link_orientation"][n][:first_illegal_id]
-                
+                # link_position / link_orientation 在 data.pt 中是 (T, N_bodies, 3); 沿时间轴截断
+                data["link_position"] = data["link_position"][:first_illegal_id]
+                data["link_orientation"] = data["link_orientation"][:first_illegal_id]
+
                 legal_datasets += [data]
                 legal_names += [name]
                 total_length += first_illegal_id
-                total_time += first_illegal_id / data["framerate"]
+                total_time += first_illegal_id / fps
         else:
             legal_datasets += [data]
             legal_names += [name]
             total_length += data["base_position"].shape[0]
-            total_time += data["base_position"].shape[0] / data["framerate"]
+            total_time += data["base_position"].shape[0] / fps
     
     print("Number of legal motion dataset: ", len(legal_datasets))
     print("Total frame number: ", total_length)

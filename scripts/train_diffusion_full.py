@@ -137,13 +137,7 @@ def main():
                                (x.shape[0],), device=device)
             x_t = scheduler.add_noise(x, noise, ts)
             eps_pred = model(x_t, ts, cond)
-            # Loss masking: 生成时 joint(27)/rpy(3) 每 step 被 inpaint 替换为加噪 ref,
-            # 模型在这些通道的输出不会被使用. 若 loss 对 33 维平均, base_pos 只占 3/33=9%
-            # 学习压力, 模型会把容量给更容易预测的 joint/rpy (时间相干性强), base_pos 学不好.
-            # joint/rpy 通过 Transformer attention 作为 conditioning 为 base_pos 提供约束.
-            loss = torch.nn.functional.mse_loss(
-                eps_pred[:, :, BASE_POS_SLICE], noise[:, :, BASE_POS_SLICE],
-            )
+            loss = torch.nn.functional.mse_loss(eps_pred, noise)
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

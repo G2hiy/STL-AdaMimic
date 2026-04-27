@@ -230,6 +230,8 @@ def main():
     # --- 条件采样范围 (原始 → 归一化) ---
     rng_raw = parse_delta_p_range(args.delta_p_range)                   # (2, 3)
     base_pos_std = std[BASE_POS_SLICE]
+    assert (base_pos_std > 1e-6).all(), \
+        f"base_pos_std degenerate: {base_pos_std.tolist()}; ckpt 的 norm_stats 异常"
     rng_norm = rng_raw / base_pos_std[None, :]
     print(f"[cond] Δp range raw low={rng_raw[0].tolist()} high={rng_raw[1].tolist()}")
     print(f"       Δp range norm low={rng_norm[0].tolist()} high={rng_norm[1].tolist()}")
@@ -258,8 +260,11 @@ def main():
         gen_base_pos = x_denorm[:, :, BASE_POS_SLICE]                   # (n_gen, T, 3)
         gen_base_rpy = x_denorm[:, :, BASE_RPY_SLICE]                   # (n_gen, T, 3)
 
-        # SDEdit 起点本就是 ref, 理论上 base_pos[0] 已在 ref[0] 附近; 再做一次零漂校正
+        # SDEdit 起点本就是 ref, 理论上 t=0 帧已在 ref[0] 附近; 再做一次零漂校正
+        # 三个分量都需要对齐: 否则 stage1 reset 时机器人会从错误关节/朝向瞬移开始
         gen_base_pos = gen_base_pos - gen_base_pos[:, 0:1, :] + ref_base_pos[0:1, :].unsqueeze(0)
+        gen_joint    = gen_joint    - gen_joint[:, 0:1, :]    + ref_joint[0:1, :].unsqueeze(0)
+        gen_base_rpy = gen_base_rpy - gen_base_rpy[:, 0:1, :] + ref_rpy[0:1, :].unsqueeze(0)
 
         joint_dev = (gen_joint - ref_joint.unsqueeze(0)).norm(dim=-1).mean().item()
         joint_dev_log.append(joint_dev)
