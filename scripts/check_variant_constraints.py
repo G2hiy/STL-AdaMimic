@@ -1,21 +1,20 @@
-"""检查 variants.pt 的物理合理性 (创新点① 完整版).
+"""检查 variants.pt 的物理合理性 (创新点① root-only).
 
-校验项:
-    1. FK self-consistency: link_position / link_orientation ≈ FK(joint, base_pos, base_rpy)
-    2. 速度上限: base speed ≤ max_speed, |joint_velocity| ≤ max_joint_vel
-    3. 加速度上限: base accel ≤ max_accel
-    4. base_z ≥ min_height
+校验项 (基于 Eq.3 root-only 约束):
+    1. Eq.3 不变量: joint_position / base_pose 与 ref 严格相等
+    2. 相对几何不变性: link_position - base_position 与 ref 一致 (容差 1e-5 m)
+    3. 速度上限: base speed ≤ max_speed; |joint_velocity| ≤ max_joint_vel (joint_velocity 复制自 ref)
+    4. 加速度上限: base accel ≤ max_accel
+    5. base_z ≥ min_height
 
 用法:
     python scripts/check_variant_constraints.py \\
-        --variants_path resources/dataset/g1_dof27_data_diff/far_jump/variants_joint.pt \\
+        --variants_path resources/dataset/g1_dof27_data_diff/far_jump/variants.pt \\
         --ref_path      legged_gym/resources/dataset/g1_dof27_data/far_jump/output/data.pt
 """
 
 import argparse
 import torch
-
-from legged_gym.diffusion.fk import G1FK
 
 
 def main():
@@ -23,14 +22,12 @@ def main():
     p.add_argument("--variants_path", required=True)
     p.add_argument("--ref_path", required=True)
     p.add_argument("--fps", type=float, default=None)
-    p.add_argument("--max_pos_err", type=float, default=1e-3, help="m, FK self-consistency")
-    p.add_argument("--max_rpy_err", type=float, default=1e-3, help="rad, FK self-consistency")
+    p.add_argument("--max_rel_geom_err", type=float, default=1e-5,
+                   help="m, |link_pos - base_pos - (ref_link_pos - ref_base_pos)| 上限")
     p.add_argument("--max_speed", type=float, default=4.0, help="m/s, base")
     p.add_argument("--max_accel", type=float, default=30.0, help="m/s^2, base")
     p.add_argument("--max_joint_vel", type=float, default=20.0, help="rad/s")
     p.add_argument("--min_height", type=float, default=0.0, help="m, base_z 下限")
-    p.add_argument("--urdf_path", default=None)
-    p.add_argument("--device", default="cpu")
     args = p.parse_args()
 
     blob = torch.load(args.variants_path)
@@ -39,28 +36,44 @@ def main():
     meta = blob.get("meta", {}) if isinstance(blob, dict) else {}
     fps = float(args.fps) if args.fps is not None else float(meta.get("fps", 50.0))
 
-    urdf_kwargs = {"urdf_path": args.urdf_path} if args.urdf_path else {}
-    fk = G1FK(device=args.device, **urdf_kwargs)
-    fk_link_names = meta.get("link_names") if isinstance(meta, dict) else None
-    if fk_link_names is None:
-        fk_link_names = list(fk.link_names)
+    ref_base_pos = ref["base_position"].float()
+    ref_joint = ref["joint_position"].float()
+    ref_rpy = ref["base_pose"].float()
+    ref_link_rel = ref["link_position"].float() - ref_base_pos.unsqueeze(1)
 
     print(f"checking {len(variants)} variants against ref {args.ref_path}")
-    print(f"[meta] version={meta.get('version', 'n/a')} fps={fps} sdedit_t_start={meta.get('sdedit_t_start', 'n/a')}")
+    print(f"[meta] version={meta.get('version', 'n/a')} fps={fps} "
+          f"sdedit_t_start={meta.get('sdedit_t_start', 'n/a')}")
     if "constraints" in meta:
         print(f"[meta] constraints={meta['constraints']}")
-    print(f"[fk] using {len(fk_link_names)} links (meta={fk_link_names is not None})")
 
     dt = 1.0 / fps
     n_ok = 0
     for i, v in enumerate(variants):
         errs = []
 
-        # shape 一致
-        if v["base_position"].shape != ref["base_position"].shape:
+        if v["base_position"].shape != ref_base_pos.shape:
             errs.append(
                 f"base_position shape {tuple(v['base_position'].shape)} "
-                f"!= ref {tuple(ref['base_position'].shape)}"
+                f"!= ref {tuple(ref_base_pos.shape)}"
+            )
+
+        # Eq.3 不变量
+        if not torch.equal(v["joint_position"].float(), ref_joint):
+            errs.append("joint_position ≠ ref (Eq.3 violated)")
+        if not torch.equal(v["base_pose"].float(), ref_rpy):
+            errs.append("base_pose ≠ ref (Eq.3 violated)")
+
+        # 相对几何不变性
+        var_link_rel = v["link_position"].float() - v["base_position"].float().unsqueeze(1)
+        if var_link_rel.shape == ref_link_rel.shape:
+            rel_err = (var_link_rel - ref_link_rel).abs().max().item()
+            if rel_err > args.max_rel_geom_err:
+                errs.append(f"link rel-geom err={rel_err:.2e} > {args.max_rel_geom_err}")
+        else:
+            errs.append(
+                f"link_position shape {tuple(v['link_position'].shape)} "
+                f"!= ref {tuple(ref['link_position'].shape)}"
             )
 
         # base_z 下限
@@ -79,34 +92,12 @@ def main():
         if a_max > args.max_accel:
             errs.append(f"base accel max={a_max:.2f} > {args.max_accel}")
 
-        # joint 速度
+        # joint 速度 (joint_position 等于 ref, 这里更多是 sanity)
         jp = v["joint_position"].float()
         j_vel = (jp[1:] - jp[:-1]) / dt
         jv_max = j_vel.abs().max().item()
         if jv_max > args.max_joint_vel:
             errs.append(f"joint_vel max={jv_max:.2f} > {args.max_joint_vel}")
-
-        # FK self-consistency
-        link_pos, link_rpy, _ = fk(
-            v["base_position"].float().unsqueeze(0),
-            v["base_pose"].float().unsqueeze(0),
-            v["joint_position"].float().unsqueeze(0),
-            target_link_names=fk_link_names,
-        )
-        link_pos = link_pos.squeeze(0).to(v["link_position"].dtype)
-        link_rpy = link_rpy.squeeze(0).to(v["link_orientation"].dtype)
-        if link_pos.shape != v["link_position"].shape:
-            errs.append(
-                f"FK link_pos shape {tuple(link_pos.shape)} "
-                f"!= variant {tuple(v['link_position'].shape)}"
-            )
-        else:
-            dp = (link_pos - v["link_position"]).norm(dim=-1).max().item()
-            dr = (link_rpy - v["link_orientation"]).norm(dim=-1).max().item()
-            if dp > args.max_pos_err:
-                errs.append(f"FK link_pos err={dp:.4f} > {args.max_pos_err}")
-            if dr > args.max_rpy_err:
-                errs.append(f"FK link_rpy err={dr:.4f} > {args.max_rpy_err}")
 
         if errs:
             print(f"  [FAIL] variant {i}: {errs}")

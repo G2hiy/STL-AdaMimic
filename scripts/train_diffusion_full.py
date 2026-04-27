@@ -1,26 +1,24 @@
-"""训练全身扩散模型 (创新点① 完整版 S2).
+"""训练根平移扩散模型 (创新点① root-only).
 
 输入:
-    --data_path  S1 产物 amass_g1_full.pt
-                 {trajectories[N,T,33], norm_stats{mean,std}, source_ids, meta}
+    --data_path  S1 产物 amass_g1_root.pt
+                 {trajectories[N,T,3], norm_stats{mean,std}, source_ids, meta}
     --ref_path   基准 data.pt, 用于记录 ref_T / 与训练 seq_len 对齐诊断
 
 输出:
     --ckpt_dir 下 epoch_xxxx.pt, 含 model.state_dict() + scheduler config + norm_stats + meta
 
-关键差异 (vs MVP train_root_diffusion.py):
-    - traj_dim: 3 → 33
-    - d_model: 256 → 384 (适度加宽)
-    - n_layers: 6 → 8 (加深)
-    - cond_dim: 3 (条件仍为 Δp ∈ ℝ^3, 取自归一化空间 base_pos 末-初位移)
+设计:
+    - traj_dim = 3 (仅 base_pos)
+    - cond_dim = 3 (条件 Δp ∈ ℝ^3, 取自归一化空间 base_pos 末-初位移)
     - Checkpoint 额外存 norm_stats (generate 时需反归一化)
 
 用法:
     python scripts/train_diffusion_full.py \\
-        --data_path resources/dataset/diffusion_train/amass_g1_full.pt \\
+        --data_path resources/dataset/diffusion_train/amass_g1_root.pt \\
         --ref_path  legged_gym/resources/dataset/g1_dof27_data/high_jump/output/data.pt \\
-        --ckpt_dir  checkpoints/diffusion_full/high_jump \\
-        --epochs 200 --batch_size 64 --lr 2e-4 --d_model 384 --n_layers 8
+        --ckpt_dir  checkpoints/diffusion_root/high_jump \\
+        --epochs 200 --batch_size 64 --lr 2e-4 --d_model 256 --n_layers 6
 """
 
 import argparse
@@ -33,16 +31,15 @@ from diffusers import DDPMScheduler
 from legged_gym.diffusion.root_mdm import RootDiffusionModel
 
 
-TRAJ_DIM = 33       # [joint_27(27) | base_pos(3) | base_rpy(3)]
-BASE_POS_SLICE = slice(27, 30)
+TRAJ_DIM = 3        # base_pos
 
 
 class RootTrajectoryFullDataset(Dataset):
-    """33-dim 归一化轨迹数据集.
+    """3-dim 归一化 base_pos 轨迹数据集.
 
-    __getitem__ 返回 (x[T,33], delta_p[3])
-        delta_p = x[-1, 27:30] - x[0, 27:30]    (归一化空间 base_pos 位移)
-    这是弱监督条件; generate 阶段条件由用户/Δp 采样器提供.
+    __getitem__ 返回 (x[T,3], delta_p[3])
+        delta_p = x[-1] - x[0]    (归一化空间 base_pos 位移)
+    弱监督条件; generate 阶段条件由用户/Δp 采样器提供.
     """
 
     def __init__(self, trajectories: torch.Tensor, cond_jitter: float = 0.05):
@@ -55,8 +52,8 @@ class RootTrajectoryFullDataset(Dataset):
         return self.traj.shape[0]
 
     def __getitem__(self, idx):
-        x = self.traj[idx]                                       # (T, 33)
-        delta_p = x[-1, BASE_POS_SLICE] - x[0, BASE_POS_SLICE]   # (3,) 归一化空间
+        x = self.traj[idx]                       # (T, 3)
+        delta_p = x[-1] - x[0]                   # (3,) 归一化空间
         if self.cond_jitter > 0:
             delta_p = delta_p + torch.randn_like(delta_p) * self.cond_jitter
         return x, delta_p
@@ -71,8 +68,8 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--lr", type=float, default=2e-4)
     p.add_argument("--num_train_timesteps", type=int, default=1000)
-    p.add_argument("--d_model", type=int, default=384)
-    p.add_argument("--n_layers", type=int, default=8)
+    p.add_argument("--d_model", type=int, default=256)
+    p.add_argument("--n_layers", type=int, default=6)
     p.add_argument("--n_heads", type=int, default=8)
     p.add_argument("--cond_jitter", type=float, default=0.05)
     p.add_argument("--save_every", type=int, default=20)
