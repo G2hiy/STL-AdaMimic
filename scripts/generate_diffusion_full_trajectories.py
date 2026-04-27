@@ -223,9 +223,11 @@ def main():
     )
     print(f"[fk]   N_keyframe_links={len(link_names)}  names={link_names}")
 
-    # --- 归一化空间 ref ---
-    ref_stack = torch.cat([ref_joint, ref_base_pos, ref_rpy], dim=-1)   # (T, 33)
-    x_ref_norm = (ref_stack - mean[None, :]) / std[None, :]             # (T, 33)
+    # 与新版 S1 保持一致：base_pos 三维全部相对首帧
+    ref_base_model = ref_base_pos - ref_base_pos[0:1, :]
+
+    ref_stack = torch.cat([ref_joint, ref_base_model, ref_rpy], dim=-1)
+    x_ref_norm = (ref_stack - mean[None, :]) / std[None, :]
 
     # --- 条件采样范围 (原始 → 归一化) ---
     rng_raw = parse_delta_p_range(args.delta_p_range)                   # (2, 3)
@@ -256,14 +258,19 @@ def main():
         ).cpu()                                                         # (n_gen, T, 33)
 
         x_denorm = x_norm * std[None, None, :] + mean[None, None, :]    # (n_gen, T, 33)
-        gen_joint = x_denorm[:, :, JOINT_SLICE]                         # (n_gen, T, 27)
-        gen_base_pos = x_denorm[:, :, BASE_POS_SLICE]                   # (n_gen, T, 3)
-        gen_base_rpy = x_denorm[:, :, BASE_RPY_SLICE]                   # (n_gen, T, 3)
+        gen_joint = x_denorm[:, :, JOINT_SLICE]
+        gen_base_rel = x_denorm[:, :, BASE_POS_SLICE]
+        gen_base_rpy = x_denorm[:, :, BASE_RPY_SLICE]
 
-        # SDEdit 起点本就是 ref, 理论上 t=0 帧已在 ref[0] 附近; 再做一次零漂校正
-        # 三个分量都需要对齐: 否则 stage1 reset 时机器人会从错误关节/朝向瞬移开始
-        gen_base_pos = gen_base_pos - gen_base_pos[:, 0:1, :] + ref_base_pos[0:1, :].unsqueeze(0)
-        gen_joint    = gen_joint    - gen_joint[:, 0:1, :]    + ref_joint[0:1, :].unsqueeze(0)
+        # 新版 S1/S2 的 base_pos 是相对位移，所以这里恢复成 data.pt / motionlib 需要的 world-space
+        gen_base_pos = (
+            gen_base_rel
+            - gen_base_rel[:, 0:1, :]
+            + ref_base_pos[0:1, :].unsqueeze(0)
+        )
+
+        # joint/rpy 继续首帧对齐，避免 reset 瞬移
+        gen_joint = gen_joint - gen_joint[:, 0:1, :] + ref_joint[0:1, :].unsqueeze(0)
         gen_base_rpy = gen_base_rpy - gen_base_rpy[:, 0:1, :] + ref_rpy[0:1, :].unsqueeze(0)
 
         joint_dev = (gen_joint - ref_joint.unsqueeze(0)).norm(dim=-1).mean().item()

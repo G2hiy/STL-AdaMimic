@@ -151,9 +151,11 @@ def main():
             if float(z.max() - z.min()) < args.min_z_range:
                 n_dropped_static += 1
                 continue
-            # 只归零 base_pos 的 xy; 保留 z / 关节 / rpy 的绝对值
-            win[:, 27 + 0] -= win[0, 27 + 0]
-            win[:, 27 + 1] -= win[0, 27 + 1]
+            # base_pos 三维全部转成相对窗口首帧
+            # 训练模型只学习 [Δx, Δy, Δz]，不学习 AMASS/仿真世界坐标的绝对高度
+            base0 = win[0, 27:30].copy()
+            win[:, 27:30] -= base0
+
             trajectories.append(win)
             source_ids.append(f"{os.path.relpath(fp, args.amass_dir)}::{start}")
 
