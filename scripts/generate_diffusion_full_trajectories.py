@@ -108,30 +108,45 @@ def sample_sdedit(
     conds: torch.Tensor,           # (M, cond_dim) 归一化空间
     x_ref_norm: torch.Tensor,      # (T, 33) 归一化空间 ref
     t_start: int,
-    num_inference_steps: int,
+    num_inference_steps: int,      # 这里保留参数，但 SDEdit 默认不用稀疏 50 步
     device: torch.device,
 ) -> torch.Tensor:
-    """SDEdit: 把 ref 加噪到 t₀, 再 denoise 到 0. 返回 (M, T, 33) 归一化空间."""
+    """
+    SDEdit:
+        1. 把 ref 加噪到 t_start
+        2. 从 t_start 逐训练步 denoise 到 0
+
+    注意:
+        不建议在 SDEdit 中用 num_inference_steps=50 的稀疏 scheduler。
+        否则 t_start=100 时只剩约 5 个反向步，base_pos 容易高频抖动。
+    """
     M = conds.shape[0]
     T = x_ref_norm.shape[0]
-    scheduler.set_timesteps(num_inference_steps, device=device)
-    timesteps = scheduler.timesteps  # 降序 [T_max-1, …, 0]
 
-    # 找到 <= t_start 的第一个 timestep (denoise 起点)
+    # 使用完整训练 timestep，保证 t_start -> 0 有足够 denoise 步数
+    scheduler.set_timesteps(
+        int(scheduler.config.num_train_timesteps),
+        device=device,
+    )
+    timesteps = scheduler.timesteps  # [999, 998, ..., 0]
+
     start_mask = timesteps <= t_start
     start_idx = int(start_mask.nonzero()[0].item()) if start_mask.any() else 0
     t0 = int(timesteps[start_idx].item())
 
-    x_ref_dev = x_ref_norm.to(device).unsqueeze(0).expand(M, -1, -1).contiguous()  # (M, T, 33)
+    x_ref_dev = x_ref_norm.to(device).unsqueeze(0).expand(M, -1, -1).contiguous()
     ts_add = torch.full((M,), t0, dtype=torch.long, device=device)
+
     noise = torch.randn_like(x_ref_dev)
     x = scheduler.add_noise(x_ref_dev, noise, ts_add)
 
     conds_dev = conds.to(device)
+
     for t in timesteps[start_idx:]:
         ts = torch.full((M,), int(t.item()), dtype=torch.long, device=device)
         eps = model(x, ts, conds_dev)
         x = scheduler.step(eps, t, x).prev_sample
+
     return x
 
 
